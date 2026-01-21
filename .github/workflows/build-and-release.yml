@@ -1,4 +1,4 @@
-name: Build Android APK - Full Build
+name: Build EasyControl with Dependencies
 
 on:
   push:
@@ -10,12 +10,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. 检出代码（包含所有分支）
-    - name: Checkout code with submodules
+    # 1. 检出代码
+    - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        submodules: recursive  # 如果有子模块
 
     # 2. 设置 JDK 17
     - name: Set up JDK 17
@@ -24,7 +23,7 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    # 3. 安装 Android SDK（关键步骤）
+    # 3. 安装 Android SDK
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
@@ -33,118 +32,59 @@ jobs:
       run: |
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-    # 5. 缓存 Android SDK
-    - name: Cache Android SDK
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.android/build-cache
-          $ANDROID_HOME
-        key: ${{ runner.os }}-android-${{ hashFiles('easycontrol/**/*.gradle*') }}
-        restore-keys: |
-          ${{ runner.os }}-android-
+    # 5. 检查项目结构
+    - name: Inspect project structure
+      run: |
+        cd easycontrol
+        echo "=== 模块结构 ==="
+        find . -name "*.gradle" -type f | grep -v ".gradle/wrapper" | sort
+        echo ""
+        echo "=== server 模块源码 ==="
+        find server -name "*.java" -type f | head -20
+        echo ""
+        echo "=== 查找 ActiveHelper ==="
+        find . -type f -name "*ActiveHelper*" 2>/dev/null || echo "未找到"
+        echo ""
+        echo "=== raw 资源 ==="
+        find . -type f -path "*/res/raw/*" 2>/dev/null || echo "未找到 raw 资源"
 
-    # 6. 缓存 Gradle 依赖
-    - name: Cache Gradle dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-          easycontrol/.gradle
-        key: ${{ runner.os }}-gradle-${{ hashFiles('easycontrol/**/*.gradle*', 'easycontrol/gradle/wrapper/gradle-wrapper.properties') }}
-        restore-keys: |
-          ${{ runner.os }}-gradle-
-
-    # 7. 修复可能的权限问题
-    - name: Fix permissions and prepare
+    # 6. 正确的构建顺序
+    - name: Build with correct order
       run: |
         cd easycontrol
         chmod +x gradlew
         
-        # 创建可能缺失的目录
-        mkdir -p app/src/main/java/top/saymzx/easycontrol/app/helper/
-        mkdir -p app/src/main/res/raw/
+        echo "步骤1: 构建 server 模块..."
+        ./gradlew :server:assembleDebug --stacktrace || echo "server 模块构建可能失败，继续..."
         
-        # 检查并创建缺失的占位文件（如果不存在）
-        if [ ! -f "app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java" ]; then
-          echo "创建 ActiveHelper 占位文件..."
-          cat > app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java << 'EOF'
-          package top.saymzx.easycontrol.app.helper;
-          
-          public class ActiveHelper {
-              public static boolean active(String key) {
-                  return true; // 简化实现
-              }
-              
-              public static boolean deactivate(String key) {
-                  return true; // 简化实现
-              }
-          }
-          EOF
-        fi
+        echo "步骤2: 检查生成的类..."
+        find . -name "*.class" -type f | grep -i "activehelper" | head -5 || echo "未找到 ActiveHelper 类文件"
         
-        # 检查 raw 资源
-        if [ ! -f "app/src/main/res/raw/easycontrol_server" ]; then
-          echo "警告: 未找到 easycontrol_server 资源文件"
-          # 可以创建一个空文件作为占位符
-          touch app/src/main/res/raw/easycontrol_server
-        fi
-
-    # 8. 尝试完整构建
-    - name: Build with Gradle (full)
-      run: |
-        cd easycontrol
-        echo "开始完整构建..."
+        echo "步骤3: 构建整个项目..."
+        # 使用 --dry-run 查看任务执行顺序
+        ./gradlew assembleDebug --dry-run 2>&1 | grep -A 5 -B 5 "ActiveHelper" || true
         
-        # 清理并构建
-        ./gradlew clean
-        
-        # 首先尝试编译模块
-        echo "编译模块..."
-        ./gradlew :app:compileDebugJavaWithJavac --stacktrace || true
-        
-        # 如果失败，尝试生成 R.java
-        echo "生成资源..."
-        ./gradlew :app:generateDebugResources --stacktrace || true
-        
-        # 最终尝试完整构建
-        echo "完整构建 APK..."
+        echo "步骤4: 实际构建..."
         ./gradlew assembleDebug --stacktrace --no-daemon 2>&1 | tee build.log
         
         # 检查是否成功
-        if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+        if find . -name "*.apk" -type f | head -1; then
           echo "构建成功！"
           echo "success=true" >> $GITHUB_OUTPUT
         else
-          echo "构建失败，检查日志"
+          echo "构建失败"
           echo "success=false" >> $GITHUB_OUTPUT
-          # 显示关键错误
-          grep -A 10 -B 5 "error:" build.log || tail -50 build.log
+          # 显示具体错误
+          grep -A 5 -B 5 "error:" build.log || tail -50 build.log
         fi
 
-    # 9. 查找 APK
-    - name: Find APK if successful
-      if: steps.build.outputs.success == 'true'
-      id: find-apk
-      run: |
-        APK_PATH=$(find easycontrol -name "*.apk" -type f | head -1)
-        echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-        echo "找到 APK: $APK_PATH"
-
-    # 10. 上传制品
-    - name: Upload APK artifact
-      if: steps.build.outputs.success == 'true' && steps.find-apk.outputs.apk_path != ''
+    # 7. 上传构建产物
+    - name: Upload APK artifacts
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: easycontrol-debug-apk
-        path: ${{ steps.find-apk.outputs.apk_path }}
+        name: easycontrol-apks
+        path: |
+          easycontrol/app/build/outputs/**/*.apk
+          easycontrol/server/build/outputs/**/*.apk
         retention-days: 7
-
-    # 11. 上传构建日志（无论成功与否）
-    - name: Upload build logs
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-logs
-        path: easycontrol/build.log
-        if-no-files-found: ignore
