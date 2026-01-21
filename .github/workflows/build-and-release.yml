@@ -1,65 +1,77 @@
-name: Build and Release APK
+name: Build Android APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ] # 推送到 main 分支时触发
   pull_request:
-    branches:
-      - main
-  workflow_dispatch:
+    branches: [ "main" ] # 向 main 分支提交 PR 时触发
+  workflow_dispatch: # 允许手动触发
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # 添加权限用于创建release
 
     steps:
+    # 1. 检出代码
     - name: Checkout code
-      uses: actions/checkout@v4  # 更新到最新版本
+      uses: actions/checkout@v4
 
+    # 2. 设置 JDK 环境（Android开发推荐JDK 11或17）
     - name: Set up JDK 11
-      uses: actions/setup-java@v4  # 更新到最新版本
+      uses: actions/setup-java@v4
       with:
         java-version: '11'
-        distribution: 'temurin'  # 推荐使用temurin替代adopt
+        distribution: 'temurin' # 推荐使用 Eclipse Temurin
 
+    # 3. 缓存 Gradle 依赖，大幅加速后续构建
     - name: Cache Gradle dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
+        # 缓存路径
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        # 生成缓存键
+        key: ${{ runner.os }}-gradle-${{ hashFiles('easycontrol/**/*.gradle*', 'easycontrol/gradle/wrapper/gradle-wrapper.properties') }}
+        # 如果未命中精确key，则使用此key恢复
         restore-keys: |
           ${{ runner.os }}-gradle-
 
-    - name: Build with Gradle
+    # 4. 授予执行权限并构建 Debug APK
+    - name: Build APK with Gradle
       run: |
-        chmod +x gradlew  # 确保gradlew可执行
-        ./gradlew assembleDebug
+        cd easycontrol # 关键步骤：进入项目子目录
+        chmod +x ./gradlew
+        ./gradlew assembleDebug --stacktrace # --stacktrace 便于出错时排查
 
-    - name: Find APK file
+    # 5. 查找生成的 APK 文件（通常位置）
+    - name: Find APK File
       id: find-apk
       run: |
-        APK_PATH=$(find . -name "*.apk" -type f | head -1)
-        echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-        echo "Found APK at: $APK_PATH"
+        # 在 easycontrol 目录下搜索 APK
+        APK_PATH=$(find easycontrol -name "*.apk" -type f | head -1)
+        if [ -n "$APK_PATH" ]; then
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "✅ 找到 APK: $APK_PATH"
+          ls -la $(dirname "$APK_PATH")/ # 列出所在目录
+        else
+          echo "❌ 未找到 APK 文件，构建产物可能在其他位置。"
+          echo "正在搜索构建输出目录..."
+          find easycontrol -type d -name "outputs" | xargs -I {} find {} -type f 
+          exit 1 # 如果没找到，则使步骤失败
+        fi
 
-    - name: Upload APK as artifact
+    # 6. 上传 APK 作为工作流制品，供下载
+    - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
-        name: app-debug-apk
-        path: ${{ steps.find-apk.outputs.apk_path || 'app/build/outputs/apk/debug/' }}
-        if-no-files-found: error
+        name: easycontrol-debug-apk
+        path: ${{ steps.find-apk.outputs.apk_path }}
+        retention-days: 7 # 制品保留天数
 
-    # 可选：创建GitHub Release
-    - name: Create Release
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: softprops/action-gh-release@v1
-      with:
-        files: ${{ steps.find-apk.outputs.apk_path }}
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # (可选) 7. 如果构建成功，输出成功信息
+    - name: Build Success
+      if: success()
+      run: |
+        echo "🎉 Android APK 构建成功！"
+        echo "请点击上方的 'Summary' 选项卡，在 'Artifacts' 区域下载 APK 文件。"
