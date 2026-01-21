@@ -2,10 +2,10 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ "main" ] # 推送到 main 分支时触发
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ] # 向 main 分支提交 PR 时触发
-  workflow_dispatch: # 允许手动触发
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -16,60 +16,56 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # 2. 设置 JDK 环境（Android开发推荐JDK 11或17）
-    - name: Set up JDK 11
+    # 2. 关键修改：设置 JDK 17（Android Gradle Plugin 8.2+ 要求）
+    - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
-        java-version: '11'
-        distribution: 'temurin' # 推荐使用 Eclipse Temurin
+        java-version: '17'  # 从 '11' 改为 '17'
+        distribution: 'temurin'
 
-    # 3. 缓存 Gradle 依赖，大幅加速后续构建
+    # 3. 缓存 Gradle 依赖
     - name: Cache Gradle dependencies
       uses: actions/cache@v4
       with:
-        # 缓存路径
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
-        # 生成缓存键
         key: ${{ runner.os }}-gradle-${{ hashFiles('easycontrol/**/*.gradle*', 'easycontrol/gradle/wrapper/gradle-wrapper.properties') }}
-        # 如果未命中精确key，则使用此key恢复
         restore-keys: |
           ${{ runner.os }}-gradle-
 
     # 4. 授予执行权限并构建 Debug APK
     - name: Build APK with Gradle
       run: |
-        cd easycontrol # 关键步骤：进入项目子目录
+        cd easycontrol
         chmod +x ./gradlew
-        ./gradlew assembleDebug --stacktrace # --stacktrace 便于出错时排查
+        ./gradlew assembleDebug --stacktrace
 
-    # 5. 查找生成的 APK 文件（通常位置）
+    # 5. 查找生成的 APK 文件
     - name: Find APK File
       id: find-apk
       run: |
-        # 在 easycontrol 目录下搜索 APK
         APK_PATH=$(find easycontrol -name "*.apk" -type f | head -1)
         if [ -n "$APK_PATH" ]; then
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
           echo "✅ 找到 APK: $APK_PATH"
-          ls -la $(dirname "$APK_PATH")/ # 列出所在目录
+          ls -la $(dirname "$APK_PATH")/
         else
-          echo "❌ 未找到 APK 文件，构建产物可能在其他位置。"
-          echo "正在搜索构建输出目录..."
-          find easycontrol -type d -name "outputs" | xargs -I {} find {} -type f 
-          exit 1 # 如果没找到，则使步骤失败
+          echo "❌ 未找到 APK 文件"
+          echo "正在搜索所有可能位置..."
+          find easycontrol -type f -name "*.apk"
+          exit 1
         fi
 
-    # 6. 上传 APK 作为工作流制品，供下载
+    # 6. 上传 APK 作为工作流制品
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
       with:
         name: easycontrol-debug-apk
         path: ${{ steps.find-apk.outputs.apk_path }}
-        retention-days: 7 # 制品保留天数
+        retention-days: 7
 
-    # (可选) 7. 如果构建成功，输出成功信息
+    # 7. 构建成功提示
     - name: Build Success
       if: success()
       run: |
