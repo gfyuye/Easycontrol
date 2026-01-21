@@ -31,37 +31,36 @@ jobs:
         # 1. 创建 ActiveHelper.java
         mkdir -p app/src/main/java/top/saymzx/easycontrol/app/helper/
         
-        cat > app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java << 'EOF'
-        package top.saymzx.easycontrol.app.helper;
-        
-        import top.saymzx.easycontrol.app.entity.AppData;
-        
-        public class ActiveHelper {
-            public static boolean active(String key) {
-                // 激活实现
-                try {
-                    // 这里应该是与服务器通信的代码
-                    // 临时返回 true 以便编译
-                    return key != null && key.length() > 0;
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    return false;
-                }
-            }
-            
-            public static boolean deactivate(String key) {
-                // 反激活实现
-                try {
-                    // 这里应该是与服务器通信的代码
-                    // 临时返回 true 以便编译
-                    return true;
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    return false;
-                }
-            }
-        }
-        EOF
+        # 使用简单的 echo 命令创建文件，避免 Here Document 问题
+        echo 'package top.saymzx.easycontrol.app.helper;' > app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo 'import top.saymzx.easycontrol.app.entity.AppData;' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo 'public class ActiveHelper {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '    public static boolean active(String key) {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '        // 激活实现' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '        try {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '            // 这里应该是与服务器通信的代码' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '            // 临时返回 true 以便编译' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '            return key != null && key.length() > 0;' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '        } catch (Exception e) {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '            e.printStackTrace();' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '            return false;' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '        }' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '    }' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '    public static boolean deactivate(String key) {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '        // 反激活实现' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '        try {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '            // 这里应该是与服务器通信的代码' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '            // 临时返回 true 以便编译' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '            return true;' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '        } catch (Exception e) {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '            e.printStackTrace();' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '            return false;' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '        }' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '    }' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '}' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
         
         echo "已创建 ActiveHelper.java"
         
@@ -76,42 +75,65 @@ jobs:
           # 创建一个简单的占位文件
           echo "创建 easycontrol_server 占位文件"
           echo "// This is a placeholder for easycontrol_server" > app/src/main/res/raw/easycontrol_server
-          
-          # 或者创建一个最小的 APK 结构
-          cat > app/src/main/res/raw/easycontrol_server << 'EOF'
-          placeholder-for-server-module
-          This file should be replaced with the actual server APK
-          during the build process.
-          EOF
+          echo "// This file should be replaced with the actual server APK" >> app/src/main/res/raw/easycontrol_server
+          echo "// during the build process." >> app/src/main/res/raw/easycontrol_server
         fi
         
         # 3. 验证文件已创建
         echo "=== 验证生成的文件 ==="
         ls -la app/src/main/java/top/saymzx/easycontrol/app/helper/
+        echo "ActiveHelper.java 内容:"
+        head -20 app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo ""
         ls -la app/src/main/res/raw/
+        echo "easycontrol_server 文件大小:"
+        stat -c%s app/src/main/res/raw/easycontrol_server 2>/dev/null || echo "无法获取文件大小"
 
-    - name: Build the project
+    - name: Build server module first
       run: |
         cd easycontrol
         chmod +x gradlew
         
-        echo "=== 清理并构建 ==="
-        ./gradlew clean
-        
-        echo "=== 构建 server 模块 ==="
-        ./gradlew :server:assembleDebug || echo "server 构建可能失败，继续..."
+        echo "=== 先构建 server 模块 ==="
+        ./gradlew :server:assembleDebug || echo "server 模块构建完成或失败，继续..."
+
+    - name: Build the app module
+      run: |
+        cd easycontrol
         
         echo "=== 构建 app 模块 ==="
-        if ./gradlew :app:assembleDebug --stacktrace; then
+        
+        # 再次检查文件是否存在
+        echo "检查生成的文件:"
+        [ -f "app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java" ] && echo "✓ ActiveHelper.java 存在" || echo "✗ ActiveHelper.java 缺失"
+        [ -f "app/src/main/res/raw/easycontrol_server" ] && echo "✓ easycontrol_server 存在" || echo "✗ easycontrol_server 缺失"
+        
+        # 构建
+        if ./gradlew :app:assembleDebug --stacktrace 2>&1 | tee build.log; then
           echo "✅ 构建成功！"
           echo "success=true" >> $GITHUB_OUTPUT
+          
+          # 显示生成的 APK
+          echo "生成的 APK 文件:"
+          find app/build -name "*.apk" -type f | while read f; do
+            echo "- $f ($(stat -c%s "$f") 字节)"
+          done
         else
           echo "❌ 构建失败"
           echo "success=false" >> $GITHUB_OUTPUT
+          
+          # 显示错误
+          echo "=== 错误详情 ==="
+          grep -A 5 -B 5 "error:" build.log || tail -50 build.log
+          
+          # 尝试更多诊断
+          echo "=== 更多诊断 ==="
+          echo "检查 R.java 文件:"
+          find app/build -name "R.java" -type f | head -1 | xargs grep "raw" 2>/dev/null || echo "R.java 中未找到 raw 资源"
         fi
 
     - name: Upload APK artifacts
-      if: success()
+      if: steps.build.outputs.success == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: easycontrol-apks
@@ -119,3 +141,10 @@ jobs:
           easycontrol/app/build/outputs/**/*.apk
           easycontrol/server/build/outputs/**/*.apk
         retention-days: 7
+
+    - name: Upload build log
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: easycontrol/build.log
+        retention-days: 3
