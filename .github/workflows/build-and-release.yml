@@ -22,13 +22,12 @@ jobs:
       run: |
         cd easycontrol
         mkdir -p app/src/main/java/top/saymzx/easycontrol/app/helper/
-        cat > app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java << 'EOF'
-package top.saymzx.easycontrol.app.helper;
-public class ActiveHelper {
-    public static boolean active(String key) { return true; }
-    public static boolean deactivate(String key) { return true; }
-}
-EOF
+        echo 'package top.saymzx.easycontrol.app.helper;' > app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo 'public class ActiveHelper {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '    public static boolean active(String key) { return true; }' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '    public static boolean deactivate(String key) { return true; }' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        echo '}' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+        
         mkdir -p app/src/main/res/raw/
         echo "placeholder" > app/src/main/res/raw/easycontrol_server
         echo "文件创建完成"
