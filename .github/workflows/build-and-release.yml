@@ -1,102 +1,60 @@
-name: Build EasyControl APK
+name: Find APK Location
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
-  build:
+  debug:
     runs-on: ubuntu-latest
-
+    
     steps:
-    # 1. 检出代码
     - name: Checkout code
       uses: actions/checkout@v4
-
-    # 2. 设置 JDK 17（必须，Android Gradle Plugin 8.2+ 要求）
+    
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
-
-    # 3. 设置 Android SDK
+    
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
-
-    # 4. 生成缺失的关键文件
+    
     - name: Generate missing files
       run: |
         cd easycontrol
-        
-        echo "=== 生成缺失的文件 ==="
-        
-        # 创建 ActiveHelper.java
         mkdir -p app/src/main/java/top/saymzx/easycontrol/app/helper/
         cat > app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java << 'EOF'
 package top.saymzx.easycontrol.app.helper;
 public class ActiveHelper {
-    public static boolean active(String key) { 
-        return key != null && !key.trim().isEmpty();
-    }
-    public static boolean deactivate(String key) { 
-        return true; 
-    }
+    public static boolean active(String key) { return true; }
+    public static boolean deactivate(String key) { return true; }
 }
 EOF
-        
-        # 创建 easycontrol_server 资源文件
         mkdir -p app/src/main/res/raw/
-        echo "placeholder_for_server_apk" > app/src/main/res/raw/easycontrol_server
-        
-        echo "文件创建完成:"
-        ls -la app/src/main/java/top/saymzx/easycontrol/app/helper/
-        ls -la app/src/main/res/raw/
-
-    # 5. 构建 APK
-    - name: Build APK
+        echo "placeholder" > app/src/main/res/raw/easycontrol_server
+    
+    - name: Build and find APK
       run: |
         cd easycontrol
         chmod +x gradlew
         
-        echo "=== 构建 Debug APK ==="
-        ./gradlew :app:assembleDebug --stacktrace
+        echo "=== 构建项目 ==="
+        ./gradlew :app:assembleDebug
         
-        echo "✅ 构建成功！"
-        echo "生成的 APK:"
-        find app/build -name "*.apk" -type f | while read f; do
-          echo "- $f ($(stat -c%s "$f") 字节)"
-        done
-
-    # 6. 查找 APK 文件
-    - name: Find APK file
-      id: find-apk
-      run: |
-        cd easycontrol
-        APK_PATH=$(find app/build -name "*.apk" -type f | head -1)
-        if [ -n "$APK_PATH" ]; then
-          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-          echo "找到 APK: $APK_PATH"
-          echo "文件大小: $(stat -c%s "$APK_PATH") 字节"
-        else
-          echo "未找到 APK 文件"
-          exit 1
-        fi
-
-    # 7. 上传 APK 作为制品
-    - name: Upload APK artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: easycontrol-debug-apk
-        path: ${{ steps.find-apk.outputs.apk_path }}
-        retention-days: 7
-
-    # 8. 成功通知
-    - name: Build success notification
-      run: |
-        echo "🎉 EasyControl APK 构建成功！"
-        echo "📱 APK 文件: ${{ steps.find-apk.outputs.apk_path }}"
-        echo "⬇️  下载: 点击上方的 'Summary' 选项卡，在 'Artifacts' 区域下载"
+        echo ""
+        echo "=== 搜索所有 APK 文件 ==="
+        find . -name "*.apk" -type f 2>/dev/null | while read f; do
+          echo "找到: $f ($(stat -c%s "$f") 字节)"
+          ls -la "$f"
+        done || echo "未找到 APK 文件"
+        
+        echo ""
+        echo "=== 检查 app 构建目录 ==="
+        ls -la app/build/ || echo "app/build 目录不存在"
+        ls -la app/build/outputs/ 2>/dev/null || echo "无 outputs 目录"
+        find app/build -type d 2>/dev/null | head -20
+        
+        echo ""
+        echo "=== 检查 Gradle 输出目录配置 ==="
+        grep -r "buildDir\|outputDir" *.gradle */*.gradle 2>/dev/null | head -10
