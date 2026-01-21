@@ -1,7 +1,5 @@
 name: Find APK Location
-
-on:
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   debug:
@@ -23,8 +21,6 @@ jobs:
     - name: Generate missing files
       run: |
         cd easycontrol
-        
-        # 创建 ActiveHelper.java
         mkdir -p app/src/main/java/top/saymzx/easycontrol/app/helper/
         cat > app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java << 'EOF'
 package top.saymzx.easycontrol.app.helper;
@@ -33,28 +29,22 @@ public class ActiveHelper {
     public static boolean deactivate(String key) { return true; }
 }
 EOF
-        
-        # 创建 easycontrol_server 资源文件
         mkdir -p app/src/main/res/raw/
         echo "placeholder" > app/src/main/res/raw/easycontrol_server
-        
         echo "文件创建完成"
     
     - name: Build and find APK
       run: |
         cd easycontrol
         chmod +x gradlew
-        
         echo "=== 构建项目 ==="
         ./gradlew :app:assembleDebug
-        
         echo ""
         echo "=== 搜索所有 APK 文件 ==="
         find . -name "*.apk" -type f 2>/dev/null | while read f; do
           echo "找到: $f ($(stat -c%s "$f") 字节)"
           ls -la "$f"
         done
-        
         echo ""
         echo "=== 检查 app 构建目录 ==="
         if [ -d "app/build" ]; then
@@ -65,7 +55,6 @@ EOF
         else
           echo "app/build 目录不存在"
         fi
-        
         echo ""
         echo "=== 列出所有构建目录 ==="
         find . -type d -name "build" 2>/dev/null | head -10
