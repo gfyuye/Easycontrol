@@ -1,59 +1,114 @@
-name: Find APK Location
-on: workflow_dispatch
-
+---
+name: Build and Release EasyControl
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: Release type
+        required: true
+        default: debug
+        type: choice
+        options:
+          - debug
+          - release
 jobs:
-  debug:
+  build:
     runs-on: ubuntu-latest
-    
+    strategy:
+      matrix:
+        variant:
+          - debug
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-    
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
-    
-    - name: Generate missing files
-      run: |
-        cd easycontrol
-        mkdir -p app/src/main/java/top/saymzx/easycontrol/app/helper/
-        echo 'package top.saymzx.easycontrol.app.helper;' > app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
-        echo 'public class ActiveHelper {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
-        echo '    public static boolean active(String key) { return true; }' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
-        echo '    public static boolean deactivate(String key) { return true; }' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
-        echo '}' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
-        
-        mkdir -p app/src/main/res/raw/
-        echo "placeholder" > app/src/main/res/raw/easycontrol_server
-        echo "文件创建完成"
-    
-    - name: Build and find APK
-      run: |
-        cd easycontrol
-        chmod +x gradlew
-        echo "=== 构建项目 ==="
-        ./gradlew :app:assembleDebug
-        echo ""
-        echo "=== 搜索所有 APK 文件 ==="
-        find . -name "*.apk" -type f 2>/dev/null | while read f; do
-          echo "找到: $f ($(stat -c%s "$f") 字节)"
-          ls -la "$f"
-        done
-        echo ""
-        echo "=== 检查 app 构建目录 ==="
-        if [ -d "app/build" ]; then
-          ls -la app/build/
-          if [ -d "app/build/outputs" ]; then
-            ls -la app/build/outputs/
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Create missing files
+        run: >
+          cd easycontrol
+
+          mkdir -p app/src/main/java/top/saymzx/easycontrol/app/helper/
+
+          echo 'package top.saymzx.easycontrol.app.helper;' > app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+
+          echo 'public class ActiveHelper {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+
+          echo '    public static boolean active(String key) {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+
+          echo '        return key != null && !key.trim().isEmpty();' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+
+          echo '    }' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+
+          echo '    public static boolean deactivate(String key) {' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+
+          echo '        return true;' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+
+          echo '    }' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+
+          echo '}' >> app/src/main/java/top/saymzx/easycontrol/app/helper/ActiveHelper.java
+
+          mkdir -p app/src/main/res/raw/
+
+          echo "server_module_placeholder_$(date +%s)" > app/src/main/res/raw/easycontrol_server
+      - name: Cache setup
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            $HOME/.android/build-cache
+          key: ${{ runner.os }}-android-${{ hashFiles('easycontrol/**/*.gradle*') }}
+      - name: Build APK
+        id: build
+        run: |
+          cd easycontrol
+          chmod +x gradlew
+
+          BUILD_VARIANT="${{ matrix.variant }}"
+          echo "Building $BUILD_VARIANT variant..."
+
+          if [ "$BUILD_VARIANT" = "debug" ]; then
+            ./gradlew :app:assembleDebug --stacktrace --no-daemon
+            APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          else
+            ./gradlew :app:assembleRelease --stacktrace --no-daemon
+            APK_PATH="app/build/outputs/apk/release/app-release.apk"
           fi
-        else
-          echo "app/build 目录不存在"
-        fi
-        echo ""
-        echo "=== 列出所有构建目录 ==="
-        find . -type d -name "build" 2>/dev/null | head -10
+
+          if [ -f "$APK_PATH" ]; then
+            echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+            echo "apk_size=$(stat -c%s "$APK_PATH")" >> $GITHUB_OUTPUT
+            echo "build_variant=$BUILD_VARIANT" >> $GITHUB_OUTPUT
+          else
+            echo "APK not found at: $APK_PATH"
+            exit 1
+          fi
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: easycontrol-${{ steps.build.outputs.build_variant }}-apk
+          path: ${{ steps.build.outputs.apk_path }}
+          retention-days: 30
+      - name: Create GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ steps.build.outputs.apk_path }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
