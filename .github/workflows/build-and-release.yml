@@ -1,247 +1,54 @@
-name: Build EasyControl Application
+name: Build Android APK
 
 on:
   push:
-    branches: [ main, develop ]
-    paths:
-      - 'easycontrol/**'
-      - '.github/workflows/build-easycontrol.yml'
+    branches: [ main, master ]
   pull_request:
-    branches: [ main, develop ]
-    paths:
-      - 'easycontrol/**'
-  workflow_dispatch:  # 允许手动触发
-    inputs:
-      build_type:
-        description: '构建类型'
-        required: true
-        default: 'release'
-        type: choice
-        options:
-        - release
-        - debug
-
-env:
-  GRADLE_VERSION: '8.5'
-  JAVA_VERSION: '17'
-  ANDROID_COMPILE_SDK: '34'
-  ANDROID_BUILD_TOOLS: '34.0.0'
-  ANDROID_SDK_TOOLS: '10406996'
-  PROJECT_DIR: 'easycontrol'
+    branches: [ main, master ]
+  release:
+    types: [created]
 
 jobs:
   build:
-    name: Build Server and App
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
       with:
-        fetch-depth: 0
-    
-    - name: Setup Java
-      uses: actions/setup-java@v4
-      with:
+        java-version: '17'
         distribution: 'temurin'
-        java-version: ${{ env.JAVA_VERSION }}
-        cache: 'gradle'
-    
+        
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
-      with:
-        build-tools-version: ${{ env.ANDROID_BUILD_TOOLS }}
-        sdkmanager: |
-          "platforms;android-${{ env.ANDROID_COMPILE_SDK }}"
-          "build-tools;${{ env.ANDROID_BUILD_TOOLS }}"
-          "platform-tools"
-          "cmdline-tools;latest"
-    
-    - name: Accept Android Licenses
-      run: |
-        yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses || true
-    
+      
+    - name: Make gradlew executable
+      run: chmod +x ./gradlew
+      
+    - name: Validate Gradle Wrapper
+      uses: gradle/wrapper-validation-action@v1
+      
     - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: ${{ env.GRADLE_VERSION }}
-        cache-read-only: ${{ github.ref != 'refs/heads/main' }}
-    
-    - name: Grant execute permission for gradlew
+      uses: gradle/gradle-build-action@v2
+      
+    - name: Build Server Module (Release)
       run: |
-        chmod +x $PROJECT_DIR/server/gradlew
-        chmod +x $PROJECT_DIR/app/gradlew
-    
-    # 步骤 1: 编译 Server 模块并执行 copyRelease 任务
-    - name: Build Server and Copy to App
-      working-directory: ${{ env.PROJECT_DIR }}/server
-      env:
-        BUILD_TYPE: ${{ github.event.inputs.build_type || 'release' }}
+        cd easycontrol
+        ./gradlew :server:copyRelease
+        
+    - name: Build App Module (Release)
       run: |
-        echo "开始编译 Server 模块..."
-        echo "构建类型: $BUILD_TYPE"
+        cd easycontrol
+        ./gradlew :app:assembleRelease
         
-        # 检查 copyRelease 任务是否存在
-        echo "检查任务..."
-        ./gradlew tasks --all | grep copyRelease || echo "copyRelease 任务未找到，尝试标准构建"
-        
-        if ./gradlew tasks --all | grep -q "copyRelease"; then
-          echo "执行 copyRelease 任务..."
-          if [ "$BUILD_TYPE" = "debug" ]; then
-            ./gradlew copyDebug
-          else
-            ./gradlew copyRelease
-          fi
-        else
-          echo "使用标准构建流程..."
-          if [ "$BUILD_TYPE" = "debug" ]; then
-            ./gradlew assembleDebug
-            # 手动复制 server 文件到 app 目录
-            mkdir -p ../app/src/main/assets
-            cp build/outputs/apk/debug/*.apk ../app/src/main/assets/server.apk
-          else
-            ./gradlew assembleRelease
-            mkdir -p ../app/src/main/assets
-            cp build/outputs/apk/release/*.apk ../app/src/main/assets/server.apk
-          fi
-        fi
-        
-        echo "检查 server 文件是否已复制到 app 目录..."
-        if [ -f "../app/src/main/assets/server.apk" ]; then
-          echo "✅ Server 文件已成功复制到 app/assets"
-          ls -la ../app/src/main/assets/
-        else
-          echo "❌ Server 文件未找到，检查其他可能的位置..."
-          # 检查其他可能的位置
-          find ../app -name "*.apk" -type f 2>/dev/null || echo "未找到任何 APK 文件"
-        fi
-    
-    # 验证 Server 文件已复制
-    - name: Verify Server File
-      run: |
-        echo "验证 Server 文件位置..."
-        
-        # 检查多个可能的位置
-        SERVER_LOCATIONS=(
-          "$PROJECT_DIR/app/src/main/assets/server.apk"
-          "$PROJECT_DIR/app/src/main/res/raw/server.apk"
-          "$PROJECT_DIR/app/build/intermediates/assets/debug/server.apk"
-          "$PROJECT_DIR/app/src/main/assets/server-debug.apk"
-          "$PROJECT_DIR/app/src/main/assets/server-release.apk"
-        )
-        
-        FOUND=false
-        for location in "${SERVER_LOCATIONS[@]}"; do
-          if [ -f "$location" ]; then
-            echo "✅ 找到 Server 文件: $location"
-            echo "SERVER_FILE_PATH=$location" >> $GITHUB_ENV
-            FOUND=true
-            break
-          fi
-        done
-        
-        if [ "$FOUND" = false ]; then
-          echo "❌ 未找到 Server 文件，尝试在 app 目录中搜索..."
-          find $PROJECT_DIR/app -name "*.apk" -type f 2>/dev/null || true
-          echo "继续构建，但可能缺少 Server 文件"
-        fi
-    
-    # 步骤 2: 编译 App 模块
-    - name: Build App
-      working-directory: ${{ env.PROJECT_DIR }}/app
-      env:
-        BUILD_TYPE: ${{ github.event.inputs.build_type || 'release' }}
-      run: |
-        echo "开始编译 App 模块..."
-        echo "构建类型: $BUILD_TYPE"
-        
-        # 清理并构建
-        if [ "$BUILD_TYPE" = "debug" ]; then
-          ./gradlew clean assembleDebug
-          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
-        else
-          ./gradlew clean assembleRelease
-          APK_PATH="app/build/outputs/apk/release/app-release.apk"
-        fi
-        
-        # 验证 APK 文件
-        if [ -f "$APK_PATH" ]; then
-          echo "✅ App APK 生成成功!"
-          echo "APK 文件大小: $(du -h "$APK_PATH" | cut -f1)"
-          echo "APK_PATH=$(pwd)/$APK_PATH" >> $GITHUB_ENV
-          
-          # 获取版本信息
-          echo "提取版本信息..."
-          if command -v aapt2 &> /dev/null; then
-            aapt2 dump badging "$APK_PATH" | grep -E "package|version" | head -2
-          fi
-        else
-          echo "❌ App APK 未找到，检查其他位置..."
-          find build/outputs/apk -name "*.apk" -type f 2>/dev/null || true
-        fi
-    
-    # 上传构建产物
     - name: Upload APK Artifacts
-      if: success() && env.APK_PATH != ''
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       with:
-        name: easycontrol-app
+        name: easycontrol-apks
         path: |
-          ${{ env.APK_PATH }}
-          ${{ env.PROJECT_DIR }}/app/build/outputs/apk/**/*.apk
+          easycontrol/app/build/outputs/apk/release/
+          easycontrol/server/build/outputs/apk/release/
         retention-days: 7
-    
-    - name: Upload Server APK
-      if: success() && env.SERVER_FILE_PATH != ''
-      uses: actions/upload-artifact@v4
-      with:
-        name: server-module
-        path: ${{ env.SERVER_FILE_PATH }}
-        retention-days: 7
-    
-    # 上传构建报告
-    - name: Upload Build Reports
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-reports
-        path: |
-          ${{ env.PROJECT_DIR }}/server/build/reports/
-          ${{ env.PROJECT_DIR }}/app/build/reports/
-        retention-days: 7
-    
-    # 生成构建摘要
-    - name: Generate Build Summary
-      if: always()
-      run: |
-        echo "# EasyControl 构建报告" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "## 构建信息" >> $GITHUB_STEP_SUMMARY
-        echo "- 触发分支: ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
-        echo "- 提交: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-        echo "- 构建类型: ${{ github.event.inputs.build_type || 'release' }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        echo "## Server 模块" >> $GITHUB_STEP_SUMMARY
-        if [ -n "$SERVER_FILE_PATH" ]; then
-          echo "✅ 编译成功并已复制到 App" >> $GITHUB_STEP_SUMMARY
-          echo "- 文件位置: $SERVER_FILE_PATH" >> $GITHUB_STEP_SUMMARY
-          echo "- 文件大小: $(du -h "$SERVER_FILE_PATH" 2>/dev/null | cut -f1 || echo '未知')" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "⚠️ Server 文件未找到或未复制" >> $GITHUB_STEP_SUMMARY
-        fi
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        echo "## App 模块" >> $GITHUB_STEP_SUMMARY
-        if [ -n "$APK_PATH" ]; then
-          echo "✅ 编译成功" >> $GITHUB_STEP_SUMMARY
-          echo "- APK 文件: $(basename "$APK_PATH")" >> $GITHUB_STEP_SUMMARY
-          echo "- 文件大小: $(du -h "$APK_PATH" | cut -f1)" >> $GITHUB_STEP_SUMMARY
-          echo "- 下载: 查看右侧 Artifacts" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "❌ 编译失败" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-        # 添加时间戳
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "*构建完成时间: $(date '+%Y-%m-%d %H:%M:%S')*" >> $GITHUB_STEP_SUMMARY
