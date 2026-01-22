@@ -1,8 +1,10 @@
-name: Build EasyControl APK
+name: Build and Release EasyControl
 
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -14,6 +16,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -36,33 +40,121 @@ jobs:
           mkdir -p app/src/main/res/raw/
           echo 'placeholder' > app/src/main/res/raw/easycontrol_server
       
+      - name: Get version info
+        id: version
+        run: |
+          # 从gradle.properties或manifest获取版本信息
+          cd easycontrol
+          if [ -f "app/build.gradle" ]; then
+            # 尝试从build.gradle提取版本
+            VERSION_NAME=$(grep -o "versionName ['\"]*[0-9.]*['\"]*" app/build.gradle | head -1 | sed "s/versionName ['\"]//" | sed "s/['\"]//")
+            VERSION_CODE=$(grep -o "versionCode [0-9]*" app/build.gradle | head -1 | sed "s/versionCode //")
+          fi
+          
+          # 如果没找到，使用默认值
+          VERSION_NAME=${VERSION_NAME:-"1.0.0"}
+          VERSION_CODE=${VERSION_CODE:-"1"}
+          
+          # 如果是标签构建，使用标签名
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+            echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+            VERSION_NAME="$TAG_NAME"
+          fi
+          
+          # 添加构建时间戳
+          BUILD_TIME=$(date +%Y%m%d-%H%M%S)
+          
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
+          echo "build_number=$GITHUB_RUN_NUMBER" >> $GITHUB_OUTPUT
+          
+          echo "版本信息:"
+          echo "版本名: $VERSION_NAME"
+          echo "版本号: $VERSION_CODE"
+          echo "构建时间: $BUILD_TIME"
+          echo "构建编号: $GITHUB_RUN_NUMBER"
+      
       - name: Build APK
         id: build
         run: |
           cd easycontrol
           chmod +x gradlew
-          ./gradlew :app:assembleDebug
           
-          # 确认 APK 存在
-          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
-            echo "✅ APK 构建成功"
-            echo "APK 路径: app/build/outputs/apk/debug/app-debug.apk"
-            echo "文件大小: $(stat -c%s "app/build/outputs/apk/debug/app-debug.apk") 字节"
-          else
-            echo "❌ APK 未找到，搜索所有 APK..."
-            find . -name "*.apk" -type f
-            exit 1
-          fi
+          echo "Building Debug APK..."
+          ./gradlew :app:assembleDebug --stacktrace
+          
+          # 原始APK路径
+          ORIGINAL_APK="app/build/outputs/apk/debug/app-debug.apk"
+          
+          # 创建带版本信息的新文件名
+          NEW_APK_NAME="EasyControl-v${{ steps.version.outputs.version_name }}-build${{ steps.version.outputs.build_number }}-debug.apk"
+          
+          # 复制并重命名APK
+          cp "$ORIGINAL_APK" "$NEW_APK_NAME"
+          
+          # 输出路径
+          echo "original_apk_path=easycontrol/$ORIGINAL_APK" >> $GITHUB_OUTPUT
+          echo "apk_path=easycontrol/$NEW_APK_NAME" >> $GITHUB_OUTPUT
+          echo "apk_name=$NEW_APK_NAME" >> $GITHUB_OUTPUT
+          
+          echo "APK构建完成:"
+          echo "原始路径: $ORIGINAL_APK"
+          echo "新路径: $NEW_APK_NAME"
+          echo "文件大小: $(stat -c%s "$NEW_APK_NAME") 字节"
       
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: easycontrol-debug-apk
-          path: easycontrol/app/build/outputs/apk/debug/app-debug.apk  # 注意这里加了 easycontrol/ 前缀
-          retention-days: 7
+          name: ${{ steps.build.outputs.apk_name }}
+          path: ${{ steps.build.outputs.apk_path }}
+          retention-days: 30
       
-      - name: Success message
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          name: EasyControl ${{ steps.version.outputs.version_name }}
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          body: |
+            EasyControl Android App
+            
+            **版本信息**
+            - 版本: ${{ steps.version.outputs.version_name }}
+            - 构建号: ${{ steps.version.outputs.build_number }}
+            - 构建时间: ${{ steps.version.outputs.build_time }}
+            
+            **下载**
+            - [EasyControl Debug APK](https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag_name }}/${{ steps.build.outputs.apk_name }})
+            
+            **安装说明**
+            1. 下载APK文件
+            2. 在Android设备上允许安装来自未知来源的应用
+            3. 安装APK并运行
+          files: ${{ steps.build.outputs.apk_path }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Build summary
         run: |
-          echo "✅ Build successful!"
-          echo "📱 APK: easycontrol/app/build/outputs/apk/debug/app-debug.apk"
-          echo "⬇️  下载: 点击上方的 'Summary' 选项卡，在 'Artifacts' 区域下载"
+          echo "✅ 构建成功！"
+          echo ""
+          echo "📋 构建信息:"
+          echo "  版本: ${{ steps.version.outputs.version_name }}"
+          echo "  构建号: ${{ steps.version.outputs.build_number }}"
+          echo "  构建时间: ${{ steps.version.outputs.build_time }}"
+          echo ""
+          
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "🚀 Release 已创建:"
+            echo "  APK: ${{ steps.build.outputs.apk_name }}"
+            echo "  下载: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag_name }}"
+          else
+            echo "📦 Artifact 已上传:"
+            echo "  APK: ${{ steps.build.outputs.apk_name }}"
+            echo "  下载: 点击上方的 'Summary' 选项卡，在 'Artifacts' 区域下载"
+          fi
