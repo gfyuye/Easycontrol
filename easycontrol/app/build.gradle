@@ -16,15 +16,7 @@ signingConfigs {
             keyPassword findProperty('signingKeyPassword') ?: System.getenv('SIGNING_KEY_PASSWORD') ?: ""
         }
     }
-
-    buildTypes {
-        release {
-            // ... 其他已有配置
-            signingConfig signingConfigs.release  // 应用签名配置
-        }
-    }
-
-  //签名结束
+// 签名  
   defaultConfig {
     applicationId "top.saymzx.easycontrol.app"
     minSdk 21
@@ -47,6 +39,9 @@ signingConfigs {
       debuggable true
     }
     release {
+      // 签名
+      signingConfig signingConfigs.release
+      // 签名
       buildConfigField "boolean", "ENABLE_DEBUG_FEATURE", "false"
       manifestPlaceholders = [app_name: "@string/app_name", app_icon: "@mipmap/ic_launcher", app_icon_round: "@mipmap/ic_launcher_round"]
       debuggable false
