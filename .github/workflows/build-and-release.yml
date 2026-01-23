@@ -32,7 +32,6 @@ jobs:
         
         # 先列出所有别名看看
         echo "尝试列出所有别名（可能需要密码）..."
-        echo "检查密码:${{ secrets.SIGNING_STORE_PASSWORD }}"
         if keytool -list -keystore keystore.jks -storepass  "${{ secrets.SIGNING_STORE_PASSWORD }}"  2>/dev/null; then
           echo "✅ 密码正确，可以访问密钥库"
           echo "password_correct=true" >> $GITHUB_OUTPUT
@@ -47,8 +46,7 @@ jobs:
         fi
         
         # 检查别名是否存在
-        echo "检查别名: ${{ secrets.SIGNING_KEY_ALIAS }}"
-        if keytool -list -keystore keystore.jks -alias "${{ secrets.SIGNING_KEY_ALIAS }}" -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
+       if keytool -list -keystore keystore.jks -alias "${{ secrets.SIGNING_KEY_ALIAS }}" -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
           echo "✅ 别名存在且密码正确"
           echo "alias_exists=true" >> $GITHUB_OUTPUT
         else
