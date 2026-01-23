@@ -46,7 +46,7 @@ jobs:
         fi
         
         # 检查别名是否存在
-       if keytool -list -keystore keystore.jks -alias "${{ secrets.SIGNING_KEY_ALIAS }}" -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
+        if keytool -list -keystore keystore.jks -alias "${{ secrets.SIGNING_KEY_ALIAS }}" -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
           echo "✅ 别名存在且密码正确"
           echo "alias_exists=true" >> $GITHUB_OUTPUT
         else
