@@ -34,13 +34,25 @@ jobs:
       run: |
         # 解码并放置签名密钥文件
         echo "${{ secrets.SIGNING_KEYSTORE_FILE }}" | base64 -d > ../easycontrol_release.jks
-        # 确认文件已生成（可选）
-        ls -la ../easycontrol_release.jks
+        
+        # 验证文件
+        echo "密钥文件大小: $(wc -c < ../easycontrol_release.jks) 字节"
+        file ../easycontrol_release.jks || echo "无法识别文件类型"
         
     - name: Make gradlew executable
       run: |
         cd easycontrol
         chmod +x ./gradlew
+        
+    - name: Debug info
+      run: |
+        echo "=== 调试信息 ==="
+        echo "当前目录: $(pwd)"
+        echo "easycontrol目录内容:"
+        ls -la easycontrol/
+        echo "密钥文件位置: ../easycontrol_release.jks"
+        ls -la ../easycontrol_release.jks 2>/dev/null || echo "密钥文件不存在"
+        echo "=== 结束调试 ==="
         
     - name: Cache Gradle dependencies
       uses: actions/cache@v4
@@ -66,19 +78,59 @@ jobs:
     - name: Build Signed App Module
       run: |
         cd easycontrol
-        # 使用 Gradle 属性传递签名信息
-        ./gradlew :app:assembleRelease --no-daemon \
-          -PsigningStorePassword="${{ secrets.SIGNING_KEYSTORE_PASSWORD }}" \
-          -PsigningKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
-          -PsigningKeyPassword="${{ secrets.SIGNING_KEY_PASSWORD }}"
         
-    - name: Verify APK signature
+        # 关键修改：根据你的 build.gradle 配置传递参数
+        # 你的配置使用 signingStorePassword 和 signingKeyAlias
+        # keyPassword 使用与 storePassword 相同的值
+        
+        echo "=== 开始构建 ==="
+        echo "使用的参数:"
+        echo "-PsigningStorePassword 长度: ${#{{ secrets.SIGNING_STORE_PASSWORD }}}"
+        echo "-PsigningKeyAlias: ${{ secrets.SIGNING_KEY_ALIAS }}"
+        echo "-PsigningKeyPassword 长度: ${#{{ secrets.SIGNING_STORE_PASSWORD }}}"
+        
+        # 方法1：如果密钥密码和存储密码相同（推荐）
+        ./gradlew :app:assembleRelease --no-daemon \
+          -PsigningStorePassword="${{ secrets.SIGNING_STORE_PASSWORD }}" \
+          -PsigningKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
+          -PsigningKeyPassword="${{ secrets.SIGNING_STORE_PASSWORD }}"  # 使用相同的密码
+        
+        # 方法2：如果有独立的密钥密码（不常用）
+        # ./gradlew :app:assembleRelease --no-daemon \
+        #   -PsigningStorePassword="${{ secrets.SIGNING_STORE_PASSWORD }}" \
+        #   -PsigningKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
+        #   -PsigningKeyPassword="${{ secrets.SIGNING_KEY_PASSWORD }}"
+        
+    - name: Find and verify APK
       run: |
         cd easycontrol
-        # 验证 APK 是否已正确签名
-        ${ANDROID_HOME}/build-tools/34.0.0/apksigner verify \
-          app/build/outputs/apk/release/app-release.apk
-        echo "✅ APK 签名验证成功"
+        
+        # 查找 APK 文件
+        echo "=== 查找 APK 文件 ==="
+        find . -name "*.apk" -type f | xargs ls -lh
+        
+        APK_PATH=$(find . -name "app-release.apk" -type f | head -1)
+        
+        if [ -z "$APK_PATH" ]; then
+          echo "尝试查找其他 APK 文件..."
+          APK_PATH=$(find . -path "*/release/*.apk" -type f | head -1)
+        fi
+        
+        if [ -n "$APK_PATH" ]; then
+          echo "找到 APK: $APK_PATH"
+          
+          # 验证签名
+          echo "=== 验证签名 ==="
+          ${ANDROID_HOME}/build-tools/34.0.0/apksigner verify "$APK_PATH" && \
+            echo "✅ APK 签名验证成功" || \
+            echo "❌ APK 签名验证失败"
+        else
+          echo "❌ 未找到 APK 文件"
+          
+          # 查看构建输出目录
+          echo "构建输出目录内容:"
+          find app/build/outputs -type f 2>/dev/null || true
+        fi
         
     - name: Cleanup keystore (Security)
       if: always()
@@ -87,8 +139,9 @@ jobs:
         echo "🔒 已清理签名密钥文件"
         
     - name: Upload Signed APK
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: easycontrol-signed-release
-        path: easycontrol/app/build/outputs/apk/release/app-release.apk
-        retention-days: 7
+        path: easycontrol/app/build/outputs/apk/release/*.apk
+        if-no-files-found: error
