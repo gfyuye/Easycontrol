@@ -19,131 +19,83 @@ jobs:
         build-tools-version: '34.0.0'
         platform-version: '34'
         
-    - name: Setup keystore with correct password
-      id: setup_keystore
+    - name: Verify and setup keystore
+      id: verify_keystore
       run: |
-        echo "=== 设置密钥库 ==="
-        
-        # 解码密钥文件
+        echo "=== 步骤1: 解码密钥文件 ==="
         echo "${{ secrets.SIGNING_KEYSTORE_FILE }}" | base64 -d > keystore.jks
         
-        # 验证文件
         echo "文件大小: $(wc -c < keystore.jks) 字节"
-        echo "文件类型:"
-        file keystore.jks || echo "无法识别文件类型"
+        echo "文件类型: $(file keystore.jks)"
         
-        # 测试密码 - 使用非交互模式
-        echo "=== 测试密码 ==="
-        echo "使用密码: [${{ secrets.SIGNING_STORE_PASSWORD }}]"
-        echo "使用别名: [${{ secrets.SIGNING_KEY_ALIAS }}]"
+        echo "=== 步骤2: 测试密码和别名 ==="
         
-        # 创建自动输入密码的脚本
-        cat > test_keystore.sh << 'EOF'
-        #!/bin/bash
-        KEYSTORE=$1
-        PASSWORD=$2
-        ALIAS=$3
-        
-        # 尝试列出所有条目
-        echo "12345678" | keytool -list -keystore "$KEYSTORE" -storepass "$PASSWORD" 2>&1
-        
-        # 尝试查看特定别名
-        echo "12345678" | keytool -list -keystore "$KEYSTORE" -alias "$ALIAS" -storepass "$PASSWORD" 2>&1
-        EOF
-        
-        chmod +x test_keystore.sh
-        
-        # 运行测试
-        if ./test_keystore.sh keystore.jks "${{ secrets.SIGNING_STORE_PASSWORD }}" "${{ secrets.SIGNING_KEY_ALIAS }}" | grep -q "PrivateKeyEntry"; then
-          echo "✅ 密码和别名验证成功"
-          echo "keystore_valid=true" >> $GITHUB_OUTPUT
+        # 先列出所有别名看看
+        echo "尝试列出所有别名（可能需要密码）..."
+        if keytool -list -keystore keystore.jks -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
+          echo "✅ 密码正确，可以访问密钥库"
+          echo "password_correct=true" >> $GITHUB_OUTPUT
         else
-          echo "❌ 验证失败"
-          echo "keystore_valid=false" >> $GITHUB_OUTPUT
+          echo "❌ 密码错误或密钥库损坏"
+          echo "password_correct=false" >> $GITHUB_OUTPUT
           
-          # 显示更多信息
+          # 尝试查看密钥库类型
           echo "=== 调试信息 ==="
-          echo "尝试查看密钥库类型:"
-          keytool -list -keystore keystore.jks 2>&1 | head -20 || true
+          echo "尝试查看密钥库信息（可能需要交互输入）:"
+          keytool -list -keystore keystore.jks || true
         fi
         
-    - name: Generate new keystore if invalid
-      if: steps.setup_keystore.outputs.keystore_valid != 'true'
-      run: |
-        echo "=== 生成新的测试密钥库 ==="
+        # 检查别名是否存在
+        echo "检查别名: ${{ secrets.SIGNING_KEY_ALIAS }}"
+        if keytool -list -keystore keystore.jks -alias "${{ secrets.SIGNING_KEY_ALIAS }}" -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
+          echo "✅ 别名存在且密码正确"
+          echo "alias_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ 别名不存在或密码错误"
+          echo "alias_exists=false" >> $GITHUB_OUTPUT
+        fi
         
-        # 生成新的 PKCS12 密钥库
-        keytool -genkeypair -v \
-          -keystore new_keystore.jks \
-          -alias easycontrol \
-          -keyalg RSA -keysize 2048 -validity 10000 \
-          -storetype PKCS12 \
-          -storepass 12345678 \
-          -keypass 12345678 \
-          -dname "CN=Test, OU=Test, O=Test, L=Test, ST=Test, C=CN" \
-          > /dev/null 2>&1
-        
-        echo "✅ 已生成新的测试密钥库"
-        echo "密码: 12345678"
-        echo "别名: easycontrol"
-        
-        # 替换旧的密钥文件
-        mv new_keystore.jks keystore.jks
-        
-        # 更新环境变量，使用新密码
-        echo "SIGNING_STORE_PASSWORD=12345678" >> $GITHUB_ENV
-        echo "SIGNING_KEY_ALIAS=easycontrol" >> $GITHUB_ENV
-        
-    - name: Build project
+    - name: Build if keystore is valid
+      if: steps.verify_keystore.outputs.password_correct == 'true' && steps.verify_keystore.outputs.alias_exists == 'true'
       run: |
         cd easycontrol
         
-        # 复制密钥文件
+        # 复制验证过的密钥文件
         cp ../keystore.jks ./
         
         chmod +x ./gradlew
         
-        # 清理和构建 server
+        # 清理并构建 server
         ./gradlew clean :server:copyRelease --no-daemon
         
-        # 构建 app - 使用正确的密码
+        # 构建 app - 使用验证过的配置
         echo "=== 开始构建 app ==="
-        echo "使用参数:"
-        echo "- storePassword: ${{ env.SIGNING_STORE_PASSWORD || secrets.SIGNING_STORE_PASSWORD }}"
-        echo "- keyAlias: ${{ env.SIGNING_KEY_ALIAS || secrets.SIGNING_KEY_ALIAS }}"
-        
         ./gradlew :app:assembleRelease --no-daemon --stacktrace \
-          -PsigningStorePassword="${{ env.SIGNING_STORE_PASSWORD || secrets.SIGNING_STORE_PASSWORD }}" \
-          -PsigningKeyAlias="${{ env.SIGNING_KEY_ALIAS || secrets.SIGNING_KEY_ALIAS }}" \
-          -PsigningKeyPassword="${{ env.SIGNING_STORE_PASSWORD || secrets.SIGNING_STORE_PASSWORD }}"
+          -PsigningStorePassword="${{ secrets.SIGNING_STORE_PASSWORD }}" \
+          -PsigningKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
+          -PsigningKeyPassword="${{ secrets.SIGNING_STORE_PASSWORD }}"
         
-    - name: Verify and upload APK
+    - name: Keystore validation failed
+      if: steps.verify_keystore.outputs.password_correct != 'true' || steps.verify_keystore.outputs.alias_exists != 'true'
       run: |
-        cd easycontrol
+        echo "❌ 密钥库验证失败"
+        echo "可能的原因:"
+        echo "1. 密码错误"
+        echo "2. 别名不存在"
+        echo "3. 密钥文件损坏"
+        echo ""
+        echo "建议:"
+        echo "1. 在本地重新生成密钥"
+        echo "2. 更新 GitHub Secrets"
+        echo "3. 确认别名是否正确"
+        exit 1
         
-        # 查找 APK
-        APK_PATH=$(find . -name "app-release.apk" -type f | head -1)
-        
-        if [ -n "$APK_PATH" ]; then
-          echo "✅ 找到 APK: $APK_PATH"
-          
-          # 验证签名
-          ${ANDROID_HOME}/build-tools/34.0.0/apksigner verify "$APK_PATH" && \
-            echo "✅ APK 签名验证成功" || \
-            echo "⚠️ APK 签名验证警告"
-          
-          # 上传
-          echo "准备上传 APK..."
-        else
-          echo "❌ 未找到 APK 文件"
-          exit 1
-        fi
-        
-    - name: Upload APK artifact
+    - name: Upload APK
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: easycontrol-release
-        path: easycontrol/app/build/outputs/apk/release/*.apk
+        name: easycontrol-apk
+        path: easycontrol/app/build/outputs/apk/release/app-release.apk
         
     - name: Cleanup
       if: always()
