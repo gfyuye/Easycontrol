@@ -9,10 +9,11 @@ android {
 signingConfigs {
         release {
             // 密钥文件路径，放在项目根目录
-        storeFile file("../easycontrol_release.jks")
-        storePassword findProperty('signingPassword')  // 统一使用一个密码
-        keyAlias findProperty('signingKeyAlias')
-        keyPassword findProperty('signingPassword')    // 与storePassword相同
+            storeFile file("../easycontrol_release.jks")
+            // 从 Gradle 属性读取密码，如果没有则尝试环境变量
+            storePassword findProperty('signingStorePassword') ?: System.getenv('SIGNING_STORE_PASSWORD') ?: ""
+            keyAlias findProperty('signingKeyAlias') ?: System.getenv('SIGNING_KEY_ALIAS') ?: ""
+            keyPassword findProperty('signingKeyPassword') ?: System.getenv('SIGNING_STORE_PASSWORD') ?: ""
         }
     }
 // 签名  
