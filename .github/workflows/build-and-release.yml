@@ -1,11 +1,11 @@
-name: Build Android APK
+name: Build Signed Android APK
 
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 env:
   GRADLE_OPTS: "-Dorg.gradle.daemon=false"
@@ -26,7 +26,17 @@ jobs:
         
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
-      
+      with:
+        build-tools-version: '34.0.0'
+        platform-version: '34'
+        
+    - name: Setup signing keystore
+      run: |
+        # 解码并放置签名密钥文件
+        echo "${{ secrets.SIGNING_KEYSTORE_FILE }}" | base64 -d > ../easycontrol_release.jks
+        # 确认文件已生成（可选）
+        ls -la ../easycontrol_release.jks
+        
     - name: Make gradlew executable
       run: |
         cd easycontrol
@@ -43,22 +53,6 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-gradle-
           
-    - name: Cache Android SDK
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.android/build-cache
-          ~/.android/cache
-        key: ${{ runner.os }}-android-${{ hashFiles('easycontrol/gradle.properties') }}
-        restore-keys: |
-          ${{ runner.os }}-android-
-          
-    - name: Setup Gradle
-      uses: gradle/gradle-build-action@v3
-      with:
-        gradle-version: wrapper
-        build-root-directory: easycontrol
-        
     - name: Clean project
       run: |
         cd easycontrol
@@ -69,23 +63,32 @@ jobs:
         cd easycontrol
         ./gradlew :server:copyRelease --no-daemon
         
-    - name: Build App Module
+    - name: Build Signed App Module
       run: |
         cd easycontrol
-        ./gradlew :app:assembleRelease --no-daemon
+        # 使用 Gradle 属性传递签名信息
+        ./gradlew :app:assembleRelease --no-daemon \
+          -PsigningStorePassword="${{ secrets.SIGNING_KEYSTORE_PASSWORD }}" \
+          -PsigningKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
+          -PsigningKeyPassword="${{ secrets.SIGNING_KEY_PASSWORD }}"
         
-    - name: List generated APKs
+    - name: Verify APK signature
       run: |
-        find easycontrol -name "*.apk" -type f | xargs ls -lh
+        cd easycontrol
+        # 验证 APK 是否已正确签名
+        ${ANDROID_HOME}/build-tools/34.0.0/apksigner verify \
+          app/build/outputs/apk/release/app-release.apk
+        echo "✅ APK 签名验证成功"
         
-    - name: Upload App APK
+    - name: Cleanup keystore (Security)
+      if: always()
+      run: |
+        rm -f ../easycontrol_release.jks
+        echo "🔒 已清理签名密钥文件"
+        
+    - name: Upload Signed APK
       uses: actions/upload-artifact@v4
       with:
-        name: app-release-apk
-        path: easycontrol/app/build/outputs/apk/release/*.apk
-        
-    - name: Upload Server APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: server-release-apk
-        path: easycontrol/server/build/outputs/apk/release/*.apk
+        name: easycontrol-signed-release
+        path: easycontrol/app/build/outputs/apk/release/app-release.apk
+        retention-days: 7
