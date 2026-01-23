@@ -32,7 +32,7 @@ jobs:
         
         # 先列出所有别名看看
         echo "尝试列出所有别名（可能需要密码）..."
-        if keytool -list -keystore easycontrol_release.jks -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
+        if keytool -list -keystore keystore.jks -storepass THD95SF6931Anm6457z6467GF 2>/dev/null; then
           echo "✅ 密码正确，可以访问密钥库"
           echo "password_correct=true" >> $GITHUB_OUTPUT
         else
