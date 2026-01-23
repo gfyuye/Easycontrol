@@ -3,139 +3,103 @@ name: Build Signed Android APK
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
-
-env:
-  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
       
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-        
-    - name: Setup Android SDK
+    - name: Setup Java & Android
       uses: android-actions/setup-android@v3
       with:
+        java-version: '17'
         build-tools-version: '34.0.0'
         platform-version: '34'
         
-    - name: Setup signing keystore
+    - name: Verify and setup keystore
+      id: verify_keystore
       run: |
-        # 解码并放置签名密钥文件
-        echo "${{ secrets.SIGNING_KEYSTORE_FILE }}" | base64 -d > ../easycontrol_release.jks
+        echo "=== 步骤1: 解码密钥文件 ==="
+        echo "${{ secrets.SIGNING_KEYSTORE_FILE }}" | base64 -d > keystore.jks
         
-        # 验证文件
-        echo "密钥文件大小: $(wc -c < ../easycontrol_release.jks) 字节"
-        file ../easycontrol_release.jks || echo "无法识别文件类型"
+        echo "文件大小: $(wc -c < keystore.jks) 字节"
+        echo "文件类型: $(file keystore.jks)"
         
-    - name: Make gradlew executable
+        echo "=== 步骤2: 测试密码和别名 ==="
+        
+        # 先列出所有别名看看
+        echo "尝试列出所有别名（可能需要密码）..."
+        if keytool -list -keystore keystore.jks -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
+          echo "✅ 密码正确，可以访问密钥库"
+          echo "password_correct=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ 密码错误或密钥库损坏"
+          echo "password_correct=false" >> $GITHUB_OUTPUT
+          
+          # 尝试查看密钥库类型
+          echo "=== 调试信息 ==="
+          echo "尝试查看密钥库信息（可能需要交互输入）:"
+          keytool -list -keystore keystore.jks || true
+        fi
+        
+        # 检查别名是否存在
+        echo "检查别名: ${{ secrets.SIGNING_KEY_ALIAS }}"
+        if keytool -list -keystore keystore.jks -alias "${{ secrets.SIGNING_KEY_ALIAS }}" -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
+          echo "✅ 别名存在且密码正确"
+          echo "alias_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ 别名不存在或密码错误"
+          echo "alias_exists=false" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Build if keystore is valid
+      if: steps.verify_keystore.outputs.password_correct == 'true' && steps.verify_keystore.outputs.alias_exists == 'true'
       run: |
         cd easycontrol
+        
+        # 复制验证过的密钥文件
+        cp ../keystore.jks ./
+        
         chmod +x ./gradlew
         
-    - name: Debug info
-      run: |
-        echo "=== 调试信息 ==="
-        echo "当前目录: $(pwd)"
-        echo "easycontrol目录内容:"
-        ls -la easycontrol/
-        echo "密钥文件位置: ../easycontrol_release.jks"
-        ls -la ../easycontrol_release.jks 2>/dev/null || echo "密钥文件不存在"
-        echo "=== 结束调试 ==="
+        # 清理并构建 server
+        ./gradlew clean :server:copyRelease --no-daemon
         
-    - name: Cache Gradle dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-          easycontrol/.gradle
-        key: ${{ runner.os }}-gradle-${{ hashFiles('easycontrol/**/*.gradle*', 'easycontrol/**/gradle-wrapper.properties') }}
-        restore-keys: |
-          ${{ runner.os }}-gradle-
-          
-    - name: Clean project
-      run: |
-        cd easycontrol
-        ./gradlew clean
-        
-    - name: Build Server Module
-      run: |
-        cd easycontrol
-        ./gradlew :server:copyRelease --no-daemon
-        
-    - name: Build Signed App Module
-      run: |
-        cd easycontrol
-        
-        # 关键修改：根据你的 build.gradle 配置传递参数
-        # 你的配置使用 signingStorePassword 和 signingKeyAlias
-        # keyPassword 使用与 storePassword 相同的值
-        
-        echo "=== 开始构建 ==="
-        echo "使用的参数:"
-        echo "-PsigningStorePassword: [已设置，长度隐藏]"
-        echo "-PsigningKeyAlias: ${{ secrets.SIGNING_KEY_ALIAS }}"
-        echo "-PsigningKeyPassword: [使用与storePassword相同的值]"
-        
-        # 方法1：如果密钥密码和存储密码相同（推荐）
+        # 构建 app - 使用验证过的配置
+        echo "=== 开始构建 app ==="
         ./gradlew :app:assembleRelease --no-daemon --stacktrace \
           -PsigningStorePassword="${{ secrets.SIGNING_STORE_PASSWORD }}" \
           -PsigningKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
-          -PsigningKeyPassword="${{ secrets.SIGNING_STORE_PASSWORD }}"  # 使用相同的密码
+          -PsigningKeyPassword="${{ secrets.SIGNING_STORE_PASSWORD }}"
         
-    - name: Find and verify APK
+    - name: Keystore validation failed
+      if: steps.verify_keystore.outputs.password_correct != 'true' || steps.verify_keystore.outputs.alias_exists != 'true'
       run: |
-        cd easycontrol
+        echo "❌ 密钥库验证失败"
+        echo "可能的原因:"
+        echo "1. 密码错误"
+        echo "2. 别名不存在"
+        echo "3. 密钥文件损坏"
+        echo ""
+        echo "建议:"
+        echo "1. 在本地重新生成密钥"
+        echo "2. 更新 GitHub Secrets"
+        echo "3. 确认别名是否正确"
+        exit 1
         
-        # 查找 APK 文件
-        echo "=== 查找 APK 文件 ==="
-        find . -name "*.apk" -type f 2>/dev/null | xargs ls -lh 2>/dev/null || echo "未找到 APK 文件"
-        
-        APK_PATH=$(find . -name "app-release.apk" -type f 2>/dev/null | head -1)
-        
-        if [ -z "$APK_PATH" ]; then
-          echo "尝试查找其他 APK 文件..."
-          APK_PATH=$(find . -path "*/release/*.apk" -type f 2>/dev/null | head -1)
-        fi
-        
-        if [ -n "$APK_PATH" ]; then
-          echo "找到 APK: $APK_PATH"
-          
-          # 验证签名
-          echo "=== 验证签名 ==="
-          ${ANDROID_HOME}/build-tools/34.0.0/apksigner verify "$APK_PATH" && \
-            echo "✅ APK 签名验证成功" || \
-            echo "❌ APK 签名验证失败"
-        else
-          echo "❌ 未找到 APK 文件"
-          
-          # 查看构建输出目录
-          echo "构建输出目录内容:"
-          find app/build/outputs -type f 2>/dev/null || true
-        fi
-        
-    - name: Cleanup keystore (Security)
-      if: always()
-      run: |
-        rm -f ../easycontrol_release.jks
-        echo "🔒 已清理签名密钥文件"
-        
-    - name: Upload Signed APK
+    - name: Upload APK
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: easycontrol-signed-release
-        path: easycontrol/app/build/outputs/apk/release/*.apk
-        if-no-files-found: error
+        name: easycontrol-apk
+        path: easycontrol/app/build/outputs/apk/release/app-release.apk
+        
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -f keystore.jks
+        rm -f easycontrol/keystore.jks
+        echo "🔒 已清理密钥文件"
