@@ -85,21 +85,15 @@ jobs:
         
         echo "=== 开始构建 ==="
         echo "使用的参数:"
-        echo "-PsigningStorePassword 长度: ${#{{ secrets.SIGNING_STORE_PASSWORD }}}"
+        echo "-PsigningStorePassword: [已设置，长度隐藏]"
         echo "-PsigningKeyAlias: ${{ secrets.SIGNING_KEY_ALIAS }}"
-        echo "-PsigningKeyPassword 长度: ${#{{ secrets.SIGNING_STORE_PASSWORD }}}"
+        echo "-PsigningKeyPassword: [使用与storePassword相同的值]"
         
         # 方法1：如果密钥密码和存储密码相同（推荐）
-        ./gradlew :app:assembleRelease --no-daemon \
+        ./gradlew :app:assembleRelease --no-daemon --stacktrace \
           -PsigningStorePassword="${{ secrets.SIGNING_STORE_PASSWORD }}" \
           -PsigningKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
           -PsigningKeyPassword="${{ secrets.SIGNING_STORE_PASSWORD }}"  # 使用相同的密码
-        
-        # 方法2：如果有独立的密钥密码（不常用）
-        # ./gradlew :app:assembleRelease --no-daemon \
-        #   -PsigningStorePassword="${{ secrets.SIGNING_STORE_PASSWORD }}" \
-        #   -PsigningKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
-        #   -PsigningKeyPassword="${{ secrets.SIGNING_KEY_PASSWORD }}"
         
     - name: Find and verify APK
       run: |
@@ -107,13 +101,13 @@ jobs:
         
         # 查找 APK 文件
         echo "=== 查找 APK 文件 ==="
-        find . -name "*.apk" -type f | xargs ls -lh
+        find . -name "*.apk" -type f 2>/dev/null | xargs ls -lh 2>/dev/null || echo "未找到 APK 文件"
         
-        APK_PATH=$(find . -name "app-release.apk" -type f | head -1)
+        APK_PATH=$(find . -name "app-release.apk" -type f 2>/dev/null | head -1)
         
         if [ -z "$APK_PATH" ]; then
           echo "尝试查找其他 APK 文件..."
-          APK_PATH=$(find . -path "*/release/*.apk" -type f | head -1)
+          APK_PATH=$(find . -path "*/release/*.apk" -type f 2>/dev/null | head -1)
         fi
         
         if [ -n "$APK_PATH" ]; then
