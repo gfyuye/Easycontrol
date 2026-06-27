@@ -9,14 +9,13 @@ on:
         default: '3.7.1'
         type: string
       abi:
-        description: 'Target ABI (arm, arm64, x86, x86_64, all)'
+        description: 'Target ABI'
         required: true
-        default: 'all'
+        default: 'arm64'
         type: choice
         options:
-          - all
-          - arm
           - arm64
+          - arm
           - x86
           - x86_64
       release_title:
@@ -116,21 +115,6 @@ jobs:
           vlc-android-${{ runner.os }}-${{ github.event.inputs.version }}-
           vlc-android-${{ runner.os }}-
         
-    - name: Debug - Check current directory
-      run: |
-        echo "=== 当前目录内容 ==="
-        ls -la
-        echo ""
-        echo "=== 检查是否有 vlc-android 目录 ==="
-        if [ -d "vlc-android" ]; then
-          echo "✅ vlc-android 目录存在（可能来自缓存）"
-          echo "目录大小: $(du -sh vlc-android/ 2>/dev/null || echo '无法计算')"
-          echo "目录内容:"
-          ls -la vlc-android/ | head -20
-        else
-          echo "❌ vlc-android 目录不存在"
-        fi
-        
     - name: Download and prepare VLC Android source code
       run: |
         VERSION="${{ github.event.inputs.version }}"
@@ -197,20 +181,55 @@ jobs:
     - name: Build VLC (LibVLC + Medialibrary)
       working-directory: ./vlc-android
       run: |
-        ABI="${{ github.event.inputs.abi || 'all' }}"
+        ABI="${{ github.event.inputs.abi }}"
+        
+        # 转换 ABI 名称（如果需要）
+        case "$ABI" in
+          arm64)
+            VLC_ABI="arm64-v8a"
+            ;;
+          arm)
+            VLC_ABI="armeabi-v7a"
+            ;;
+          x86)
+            VLC_ABI="x86"
+            ;;
+          x86_64)
+            VLC_ABI="x86_64"
+            ;;
+          *)
+            echo "❌ 不支持的 ABI: $ABI"
+            exit 1
+            ;;
+        esac
+        
         echo "=== 开始编译 VLC 核心库 ==="
-        echo "目标 ABI: $ABI"
+        echo "选择的 ABI: $ABI"
+        echo "VLC ABI 参数: $VLC_ABI"
         echo "开始时间: $(date)"
         
         chmod +x buildsystem/compile.sh
-        ./buildsystem/compile.sh -l -ml -a $ABI
         
-        if [ $? -eq 0 ]; then
-          echo "✅ VLC 核心库编译完成"
-        else
-          echo "❌ VLC 核心库编译失败"
+        # 编译 LibVLC
+        echo "编译 LibVLC..."
+        ./buildsystem/compile.sh -l -a $VLC_ABI
+        
+        if [ $? -ne 0 ]; then
+          echo "❌ LibVLC 编译失败"
           exit 1
         fi
+        
+        # 编译 Medialibrary
+        echo "编译 Medialibrary..."
+        ./buildsystem/compile.sh -ml -a $VLC_ABI
+        
+        if [ $? -ne 0 ]; then
+          echo "❌ Medialibrary 编译失败"
+          exit 1
+        fi
+        
+        echo "✅ VLC 核心库编译完成"
+        echo "结束时间: $(date)"
       env:
         ANDROID_SDK: ${{ env.ANDROID_HOME }}
         ANDROID_NDK: ${{ env.ANDROID_NDK }}
@@ -222,12 +241,15 @@ jobs:
         chmod +x gradlew
         ./gradlew clean --no-daemon
         
+        # 构建 Release 版本（使用签名）
+        echo "构建 Release APK..."
         ./gradlew assembleRelease --no-daemon --stacktrace \
           -PreleaseStoreFile=keystore.jks \
           -PreleaseStorePassword="${{ secrets.SIGNING_STORE_PASSWORD }}" \
           -PreleaseKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
           -PreleaseKeyPassword="${{ secrets.SIGNING_STORE_PASSWORD }}"
         
+        # 如果 Release 构建失败，尝试使用 SignedRelease
         if [ $? -ne 0 ]; then
           echo "Release 构建失败，尝试 SignedRelease..."
           ./gradlew assembleSignedRelease --no-daemon --stacktrace \
@@ -250,19 +272,25 @@ jobs:
       id: prepare_apks
       run: |
         VERSION="${{ github.event.inputs.version }}"
+        ABI="${{ github.event.inputs.abi }}"
         mkdir -p apk_output
         
         echo "=== 查找 APK 文件 ==="
         APK_COUNT=0
         for apk in $(find ./vlc-android -name "*.apk" -type f 2>/dev/null); do
+          # 获取文件名和路径信息
           BASENAME=$(basename "$apk")
-          cp "$apk" "apk_output/vlc-android-${VERSION}-${BASENAME}"
-          echo "📱 找到 APK: vlc-android-${VERSION}-${BASENAME}"
+          # 重命名 APK 文件，包含 ABI 信息
+          NEW_NAME="vlc-android-${VERSION}-${ABI}-${BASENAME}"
+          cp "$apk" "apk_output/${NEW_NAME}"
+          echo "📱 找到 APK: ${NEW_NAME}"
           APK_COUNT=$((APK_COUNT + 1))
         done
         
         if [ $APK_COUNT -eq 0 ]; then
           echo "❌ 未找到任何 APK 文件！"
+          echo "尝试查看构建输出目录..."
+          ls -la ./vlc-android/app/build/outputs/apk/ 2>/dev/null || echo "目录不存在"
           exit 1
         fi
         
@@ -273,7 +301,7 @@ jobs:
     - name: Upload APK as Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: vlc-android-${{ github.event.inputs.version }}
+        name: vlc-android-${{ github.event.inputs.version }}-${{ github.event.inputs.abi }}
         path: apk_output/*.apk
         retention-days: 90
         
@@ -281,7 +309,7 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         tag_name: v${{ github.event.inputs.version }}
-        name: ${{ github.event.inputs.release_title || format('VLC Android {0}', github.event.inputs.version) }}
+        name: ${{ github.event.inputs.release_title || format('VLC Android {0} ({1})', github.event.inputs.version, github.event.inputs.abi) }}
         files: apk_output/*.apk
         draft: false
         prerelease: false
