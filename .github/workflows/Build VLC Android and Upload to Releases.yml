@@ -32,6 +32,8 @@ jobs:
       packages: write
     
     steps:
+    # 注意：这里不需要 checkout 自己的仓库代码，因为我们只需要构建 VLC
+    # 但为了存放密钥和上传脚本，还是保留 checkout
     - name: Checkout code
       uses: actions/checkout@v4
       
@@ -101,24 +103,11 @@ jobs:
         echo "❌ 密钥库验证失败"
         exit 1
         
-    - name: Cache VLC build artifacts
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-          vlc-android/buildsystem
-          vlc-android/contrib
-          vlc-android/.gradle
-        key: vlc-android-${{ runner.os }}-${{ github.event.inputs.version }}-${{ github.event.inputs.abi }}
-        restore-keys: |
-          vlc-android-${{ runner.os }}-${{ github.event.inputs.version }}-
-          vlc-android-${{ runner.os }}-
-        
     - name: Download and prepare VLC Android source code
       run: |
         VERSION="${{ github.event.inputs.version }}"
         echo "=== 准备 VLC Android 源代码 v${VERSION} ==="
+        echo "当前工作目录: $(pwd)"
         
         # 强制清理旧的源代码（确保干净构建）
         if [ -d "vlc-android" ]; then
@@ -127,7 +116,7 @@ jobs:
         fi
         
         # 下载源代码
-        echo "下载源代码..."
+        echo "下载源代码: https://github.com/videolan/vlc-android/archive/refs/tags/${VERSION}.tar.gz"
         wget -q --show-progress https://github.com/videolan/vlc-android/archive/refs/tags/${VERSION}.tar.gz
         if [ $? -ne 0 ]; then
           echo "❌ 下载失败！"
@@ -149,13 +138,24 @@ jobs:
         rm ${VERSION}.tar.gz
         
         echo "✅ 源代码准备完成"
+        echo "源代码目录: $(pwd)/vlc-android"
+        echo "目录内容:"
+        ls -la vlc-android/ | head -20
         
-        # 复制密钥文件
+        # 复制密钥文件到 VLC 目录
         if [ -f "keystore.jks" ]; then
           cp keystore.jks vlc-android/
-          echo "✅ 密钥文件已复制"
+          echo "✅ 密钥文件已复制到 vlc-android/"
         else
           echo "❌ 密钥文件不存在！"
+          exit 1
+        fi
+        
+        # 验证 VLC 源码是否正确
+        if [ -f "vlc-android/buildsystem/compile.sh" ]; then
+          echo "✅ VLC 源码验证通过"
+        else
+          echo "❌ VLC 源码验证失败：找不到 buildsystem/compile.sh"
           exit 1
         fi
         
@@ -163,20 +163,28 @@ jobs:
       working-directory: ./vlc-android
       run: |
         echo "=== 配置签名信息 ==="
+        echo "当前目录: $(pwd)"
+        
+        # 创建或追加 gradle.properties
         cat >> gradle.properties << EOF
         
+        # Signing configuration for Release builds
         RELEASE_STORE_FILE=keystore.jks
         RELEASE_STORE_PASSWORD=${{ secrets.SIGNING_STORE_PASSWORD }}
         RELEASE_KEY_ALIAS=${{ secrets.SIGNING_KEY_ALIAS }}
         RELEASE_KEY_PASSWORD=${{ secrets.SIGNING_STORE_PASSWORD }}
         
+        # Android settings
         android.useAndroidX=true
         android.enableJetifier=true
         org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m
         org.gradle.parallel=true
         org.gradle.caching=true
         EOF
-        echo "✅ 配置完成"
+        
+        echo "✅ gradle.properties 配置完成"
+        echo "配置文件内容:"
+        cat gradle.properties
         
     - name: Build VLC (LibVLC + Medialibrary)
       working-directory: ./vlc-android
@@ -204,10 +212,18 @@ jobs:
         esac
         
         echo "=== 开始编译 VLC 核心库 ==="
+        echo "当前目录: $(pwd)"
         echo "选择的 ABI: $ABI -> $VLC_ABI"
         echo "开始时间: $(date)"
         
+        # 确保编译脚本可执行
         chmod +x buildsystem/compile.sh
+        
+        # 检查编译脚本是否存在
+        if [ ! -f "buildsystem/compile.sh" ]; then
+          echo "❌ 找不到 buildsystem/compile.sh"
+          exit 1
+        fi
         
         # 编译 LibVLC
         echo "编译 LibVLC..."
@@ -237,9 +253,13 @@ jobs:
       working-directory: ./vlc-android
       run: |
         echo "=== 开始构建签名 APK ==="
+        echo "当前目录: $(pwd)"
+        
+        # 确保 gradlew 可执行
         chmod +x gradlew
         
         # 清理之前的构建
+        echo "清理之前的构建..."
         ./gradlew clean --no-daemon
         
         # 尝试构建 Release 版本
@@ -250,13 +270,13 @@ jobs:
           -PreleaseKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
           -PreleaseKeyPassword="${{ secrets.SIGNING_STORE_PASSWORD }}"
         
-        # 如果 Release 失败，尝试 Dev 版本（可能没有签名配置）
+        # 如果 Release 失败，尝试 Dev 版本
         if [ $? -ne 0 ]; then
           echo "⚠️ Release 构建失败，尝试 Dev 版本..."
           ./gradlew assembleDev --no-daemon --stacktrace
         fi
         
-        # 如果还是失败，尝试无签名的 Debug 版本
+        # 如果还是失败，尝试 Debug 版本
         if [ $? -ne 0 ]; then
           echo "⚠️ Dev 构建失败，尝试 Debug 版本..."
           ./gradlew assembleDebug --no-daemon --stacktrace
@@ -270,8 +290,12 @@ jobs:
         fi
         
         # 显示构建产物
+        echo ""
         echo "=== 构建产物列表 ==="
         find ./app/build/outputs/apk -name "*.apk" -type f -exec ls -lh {} \;
+        echo ""
+        echo "=== 所有 APK 文件 ==="
+        find . -name "*.apk" -type f -exec ls -lh {} \;
       env:
         ANDROID_SDK: ${{ env.ANDROID_HOME }}
         ANDROID_NDK: ${{ env.ANDROID_NDK }}
@@ -284,71 +308,50 @@ jobs:
         mkdir -p apk_output
         
         echo "=== 搜索 APK 文件 ==="
+        echo "当前目录: $(pwd)"
         
-        # 先检查标准输出目录
-        APK_DIRS=(
-          "./vlc-android/app/build/outputs/apk/release"
-          "./vlc-android/app/build/outputs/apk/dev"
-          "./vlc-android/app/build/outputs/apk/debug"
-          "./vlc-android/app/build/outputs/apk"
-        )
+        # 检查 VLC 源码目录是否存在
+        if [ ! -d "vlc-android" ]; then
+          echo "❌ vlc-android 目录不存在！"
+          exit 1
+        fi
         
+        # 搜索所有 APK
         APK_COUNT=0
-        for dir in "${APK_DIRS[@]}"; do
-          if [ -d "$dir" ]; then
-            echo "检查目录: $dir"
-            for apk in $(find "$dir" -name "*.apk" -type f 2>/dev/null); do
-              BASENAME=$(basename "$apk")
-              FILE_SIZE=$(du -h "$apk" | cut -f1)
-              NEW_NAME="vlc-android-${VERSION}-${ABI}-${BASENAME}"
-              cp "$apk" "apk_output/${NEW_NAME}"
-              echo "📱 APK: ${NEW_NAME} (大小: $FILE_SIZE)"
-              APK_COUNT=$((APK_COUNT + 1))
-            done
-          fi
-        done
+        echo "搜索路径: vlc-android/"
         
-        # 如果没找到，全局搜索
-        if [ $APK_COUNT -eq 0 ]; then
-          echo "⚠️ 标准目录未找到，进行全局搜索..."
-          for apk in $(find ./vlc-android -name "*.apk" -type f 2>/dev/null); do
-            BASENAME=$(basename "$apk")
-            FILE_SIZE=$(du -h "$apk" | cut -f1)
+        for apk in $(find ./vlc-android -name "*.apk" -type f 2>/dev/null); do
+          BASENAME=$(basename "$apk")
+          FILE_SIZE=$(du -h "$apk" | cut -f1)
+          FILE_SIZE_BYTES=$(stat -c%s "$apk" 2>/dev/null || stat -f%z "$apk" 2>/dev/null)
+          
+          # 只复制大于 1MB 的 APK（有效的 APK）
+          if [ "$FILE_SIZE_BYTES" -gt 1048576 ]; then
             NEW_NAME="vlc-android-${VERSION}-${ABI}-${BASENAME}"
             cp "$apk" "apk_output/${NEW_NAME}"
             echo "📱 APK: ${NEW_NAME} (大小: $FILE_SIZE)"
             APK_COUNT=$((APK_COUNT + 1))
-          done
-        fi
+          else
+            echo "⚠️ 忽略小文件: $BASENAME (大小: $FILE_SIZE, 可能不是有效的 APK)"
+          fi
+        done
         
-        # 检查 APK 大小，确保是有效的 APK
         if [ $APK_COUNT -gt 0 ]; then
           echo ""
-          echo "=== APK 文件详情 ==="
-          for apk in apk_output/*.apk; do
-            SIZE=$(du -h "$apk" | cut -f1)
-            echo "$(basename $apk) - $SIZE"
-            # 检查是否是有效 APK（至少 1MB）
-            SIZE_BYTES=$(stat -c%s "$apk" 2>/dev/null || stat -f%z "$apk" 2>/dev/null)
-            if [ "$SIZE_BYTES" -lt 1048576 ]; then
-              echo "⚠️ 警告: APK 文件太小 ($SIZE_BYTES 字节)，可能不是有效的 APK"
-            fi
-          done
-        fi
-        
-        if [ $APK_COUNT -eq 0 ]; then
-          echo "❌ 未找到任何 APK 文件！"
+          echo "=== 找到的 APK 文件 ==="
+          ls -lh apk_output/
+        else
+          echo "❌ 未找到任何有效的 APK 文件（大于 1MB）！"
           echo ""
-          echo "调试信息:"
-          echo "=== 检查构建输出目录 ==="
+          echo "=== 调试信息 ==="
+          echo "检查构建输出目录:"
           ls -la ./vlc-android/app/build/outputs/apk/ 2>/dev/null || echo "apk 目录不存在"
           echo ""
-          echo "=== 搜索所有 APK ==="
-          find ./vlc-android -name "*.apk" -type f 2>/dev/null || echo "没有找到任何 APK"
+          echo "搜索所有 APK（包括小文件）:"
+          find ./vlc-android -name "*.apk" -type f -exec ls -lh {} \; 2>/dev/null || echo "没有找到任何 APK"
           exit 1
         fi
         
-        echo "✅ 共找到 $APK_COUNT 个 APK 文件"
         echo "APK_COUNT=$APK_COUNT" >> $GITHUB_OUTPUT
         
     - name: Upload APK as Artifact
