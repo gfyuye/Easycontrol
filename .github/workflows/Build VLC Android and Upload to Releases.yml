@@ -1,4 +1,4 @@
-name: Build VLC Android and Upload to Releases
+name: Build VLC Android APK
 
 on:
   workflow_dispatch:
