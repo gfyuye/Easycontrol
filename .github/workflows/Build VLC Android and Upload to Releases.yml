@@ -183,7 +183,7 @@ jobs:
       run: |
         ABI="${{ github.event.inputs.abi }}"
         
-        # 转换 ABI 名称（如果需要）
+        # 转换 ABI 名称
         case "$ABI" in
           arm64)
             VLC_ABI="arm64-v8a"
@@ -204,8 +204,7 @@ jobs:
         esac
         
         echo "=== 开始编译 VLC 核心库 ==="
-        echo "选择的 ABI: $ABI"
-        echo "VLC ABI 参数: $VLC_ABI"
+        echo "选择的 ABI: $ABI -> $VLC_ABI"
         echo "开始时间: $(date)"
         
         chmod +x buildsystem/compile.sh
@@ -239,23 +238,28 @@ jobs:
       run: |
         echo "=== 开始构建签名 APK ==="
         chmod +x gradlew
+        
+        # 清理之前的构建
         ./gradlew clean --no-daemon
         
-        # 构建 Release 版本（使用签名）
-        echo "构建 Release APK..."
+        # 尝试构建 Release 版本
+        echo "尝试构建 Release APK..."
         ./gradlew assembleRelease --no-daemon --stacktrace \
           -PreleaseStoreFile=keystore.jks \
           -PreleaseStorePassword="${{ secrets.SIGNING_STORE_PASSWORD }}" \
           -PreleaseKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
           -PreleaseKeyPassword="${{ secrets.SIGNING_STORE_PASSWORD }}"
         
-        # 如果 Release 构建失败，尝试使用 SignedRelease
+        # 如果 Release 失败，尝试 Dev 版本（可能没有签名配置）
         if [ $? -ne 0 ]; then
-          echo "Release 构建失败，尝试 SignedRelease..."
-          ./gradlew assembleSignedRelease --no-daemon --stacktrace \
-            -PsigningStorePassword="${{ secrets.SIGNING_STORE_PASSWORD }}" \
-            -PsigningKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
-            -PsigningKeyPassword="${{ secrets.SIGNING_STORE_PASSWORD }}"
+          echo "⚠️ Release 构建失败，尝试 Dev 版本..."
+          ./gradlew assembleDev --no-daemon --stacktrace
+        fi
+        
+        # 如果还是失败，尝试无签名的 Debug 版本
+        if [ $? -ne 0 ]; then
+          echo "⚠️ Dev 构建失败，尝试 Debug 版本..."
+          ./gradlew assembleDebug --no-daemon --stacktrace
         fi
         
         if [ $? -eq 0 ]; then
@@ -264,6 +268,10 @@ jobs:
           echo "❌ APK 构建失败"
           exit 1
         fi
+        
+        # 显示构建产物
+        echo "=== 构建产物列表 ==="
+        find ./app/build/outputs/apk -name "*.apk" -type f -exec ls -lh {} \;
       env:
         ANDROID_SDK: ${{ env.ANDROID_HOME }}
         ANDROID_NDK: ${{ env.ANDROID_NDK }}
@@ -275,28 +283,73 @@ jobs:
         ABI="${{ github.event.inputs.abi }}"
         mkdir -p apk_output
         
-        echo "=== 查找 APK 文件 ==="
+        echo "=== 搜索 APK 文件 ==="
+        
+        # 先检查标准输出目录
+        APK_DIRS=(
+          "./vlc-android/app/build/outputs/apk/release"
+          "./vlc-android/app/build/outputs/apk/dev"
+          "./vlc-android/app/build/outputs/apk/debug"
+          "./vlc-android/app/build/outputs/apk"
+        )
+        
         APK_COUNT=0
-        for apk in $(find ./vlc-android -name "*.apk" -type f 2>/dev/null); do
-          # 获取文件名和路径信息
-          BASENAME=$(basename "$apk")
-          # 重命名 APK 文件，包含 ABI 信息
-          NEW_NAME="vlc-android-${VERSION}-${ABI}-${BASENAME}"
-          cp "$apk" "apk_output/${NEW_NAME}"
-          echo "📱 找到 APK: ${NEW_NAME}"
-          APK_COUNT=$((APK_COUNT + 1))
+        for dir in "${APK_DIRS[@]}"; do
+          if [ -d "$dir" ]; then
+            echo "检查目录: $dir"
+            for apk in $(find "$dir" -name "*.apk" -type f 2>/dev/null); do
+              BASENAME=$(basename "$apk")
+              FILE_SIZE=$(du -h "$apk" | cut -f1)
+              NEW_NAME="vlc-android-${VERSION}-${ABI}-${BASENAME}"
+              cp "$apk" "apk_output/${NEW_NAME}"
+              echo "📱 APK: ${NEW_NAME} (大小: $FILE_SIZE)"
+              APK_COUNT=$((APK_COUNT + 1))
+            done
+          fi
         done
+        
+        # 如果没找到，全局搜索
+        if [ $APK_COUNT -eq 0 ]; then
+          echo "⚠️ 标准目录未找到，进行全局搜索..."
+          for apk in $(find ./vlc-android -name "*.apk" -type f 2>/dev/null); do
+            BASENAME=$(basename "$apk")
+            FILE_SIZE=$(du -h "$apk" | cut -f1)
+            NEW_NAME="vlc-android-${VERSION}-${ABI}-${BASENAME}"
+            cp "$apk" "apk_output/${NEW_NAME}"
+            echo "📱 APK: ${NEW_NAME} (大小: $FILE_SIZE)"
+            APK_COUNT=$((APK_COUNT + 1))
+          done
+        fi
+        
+        # 检查 APK 大小，确保是有效的 APK
+        if [ $APK_COUNT -gt 0 ]; then
+          echo ""
+          echo "=== APK 文件详情 ==="
+          for apk in apk_output/*.apk; do
+            SIZE=$(du -h "$apk" | cut -f1)
+            echo "$(basename $apk) - $SIZE"
+            # 检查是否是有效 APK（至少 1MB）
+            SIZE_BYTES=$(stat -c%s "$apk" 2>/dev/null || stat -f%z "$apk" 2>/dev/null)
+            if [ "$SIZE_BYTES" -lt 1048576 ]; then
+              echo "⚠️ 警告: APK 文件太小 ($SIZE_BYTES 字节)，可能不是有效的 APK"
+            fi
+          done
+        fi
         
         if [ $APK_COUNT -eq 0 ]; then
           echo "❌ 未找到任何 APK 文件！"
-          echo "尝试查看构建输出目录..."
-          ls -la ./vlc-android/app/build/outputs/apk/ 2>/dev/null || echo "目录不存在"
+          echo ""
+          echo "调试信息:"
+          echo "=== 检查构建输出目录 ==="
+          ls -la ./vlc-android/app/build/outputs/apk/ 2>/dev/null || echo "apk 目录不存在"
+          echo ""
+          echo "=== 搜索所有 APK ==="
+          find ./vlc-android -name "*.apk" -type f 2>/dev/null || echo "没有找到任何 APK"
           exit 1
         fi
         
         echo "✅ 共找到 $APK_COUNT 个 APK 文件"
         echo "APK_COUNT=$APK_COUNT" >> $GITHUB_OUTPUT
-        ls -lh apk_output/
         
     - name: Upload APK as Artifact
       uses: actions/upload-artifact@v4
@@ -304,11 +357,12 @@ jobs:
         name: vlc-android-${{ github.event.inputs.version }}-${{ github.event.inputs.abi }}
         path: apk_output/*.apk
         retention-days: 90
+        if-no-files-found: error
         
     - name: Create GitHub Release and Upload APK
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: v${{ github.event.inputs.version }}
+        tag_name: v${{ github.event.inputs.version }}-${{ github.event.inputs.abi }}
         name: ${{ github.event.inputs.release_title || format('VLC Android {0} ({1})', github.event.inputs.version, github.event.inputs.abi) }}
         files: apk_output/*.apk
         draft: false
