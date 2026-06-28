@@ -18,26 +18,22 @@ env:
   VLC_VERSION: "3.7.1"
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
-# 取消之前的运行
 concurrency:
   group: vlc-build-${{ github.event.inputs.abi }}
   cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ubuntu-latest  # 改为 latest，可用 runner 更多
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     
     steps:
-    - name: Maximize build space
-      uses: easimon/maximize-build-space@master
+    # 注意：这里 checkout 是为了获取 workflow 本身，不是构建所需
+    # 实际构建完全从下载的源码进行
+    - name: Checkout (only for action reference)
+      uses: actions/checkout@v4
       with:
-        root-reserve-mb: 1024
-        swap-size-mb: 4096
-        remove-dotnet: 'true'
-        remove-android: 'false'
-        remove-haskell: 'true'
-        remove-codeql: 'true'
+        ref: ${{ github.event.repository.default_branch }}
 
     - name: Setup JDK 11
       uses: actions/setup-java@v4
@@ -80,14 +76,15 @@ jobs:
       with:
         packages: 'platforms;android-30 build-tools;30.0.3 platforms;android-33 build-tools;33.0.0 ndk;21.4.7075529'
 
+    # 从这里开始，所有代码都来自下载的源码，不依赖仓库代码
     - name: Download VLC Android Source
       run: |
-        echo "Downloading VLC Android ${VLC_VERSION}..."
+        echo "Downloading VLC Android ${VLC_VERSION} from GitHub..."
         wget -q https://github.com/videolan/vlc-android/archive/refs/tags/${VLC_VERSION}.tar.gz
         tar -xzf ${VLC_VERSION}.tar.gz
         mv vlc-android-${VLC_VERSION} vlc-android
         rm ${VLC_VERSION}.tar.gz
-        echo "Source downloaded and extracted"
+        echo "Source downloaded and extracted successfully"
 
     - name: Build VLC for ${{ github.event.inputs.abi }}
       working-directory: vlc-android
@@ -113,30 +110,30 @@ jobs:
         ./gradlew assembleDev --no-daemon
         echo "APK build completed at $(date)"
 
-    - name: Check APK output
+    - name: Find and Verify APK
       run: |
-        echo "Checking for APK files..."
-        find vlc-android/app/build/outputs/ -name "*.apk" -type f -exec ls -lh {} \;
+        echo "Searching for APK files..."
+        find vlc-android/ -name "*.apk" -type f -exec ls -lh {} \;
 
     - name: Sign APK
       working-directory: vlc-android
       run: |
         echo "Preparing to sign APK..."
         
-        # Decode keystore
+        # Decode keystore from secret
         echo "${{ secrets.SIGNING_KEYSTORE_FILE }}" | base64 -d > release.keystore
         
         # Find APK file
-        APK_FILE=$(find app/build/outputs/apk/ -name "*.apk" ! -name "*-unsigned*" -type f | head -n 1)
+        APK_FILE=$(find . -name "*.apk" ! -name "*-unsigned*" ! -name "*-signed*" -type f | head -n 1)
         
         if [ -z "$APK_FILE" ]; then
-          echo "No APK found, searching more broadly..."
-          APK_FILE=$(find app/build/outputs/ -name "*.apk" -type f | head -n 1)
+          echo "Searching for any APK..."
+          APK_FILE=$(find . -name "*.apk" -type f | head -n 1)
         fi
         
         if [ -z "$APK_FILE" ]; then
           echo "Error: No APK file found!"
-          find app/build/outputs/ -type f
+          find . -type f -name "*.apk"
           exit 1
         fi
         
@@ -155,7 +152,7 @@ jobs:
           --out signed-apk/vlc-android-${{ env.VLC_VERSION }}-${{ github.event.inputs.abi }}-signed.apk \
           "$APK_FILE"
         
-        # Verify
+        # Verify signature
         $ANDROID_SDK_ROOT/build-tools/33.0.0/apksigner verify --verbose \
           signed-apk/vlc-android-${{ env.VLC_VERSION }}-${{ github.event.inputs.abi }}-signed.apk
         
