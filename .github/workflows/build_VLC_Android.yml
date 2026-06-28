@@ -307,10 +307,11 @@ jobs:
         
     - name: Create package directory structure
       run: |
-        # 创建 Maven 风格的包结构
+        # 创建包结构
         PACKAGE_DIR="maven-package"
         VERSION="${{ github.event.inputs.version }}"
         ABI="${{ github.event.inputs.abi }}"
+        RELEASE_TITLE="${{ github.event.inputs.release_title }}"
         
         mkdir -p "${PACKAGE_DIR}"
         
@@ -318,17 +319,20 @@ jobs:
         cp apk_output/*.apk "${PACKAGE_DIR}/"
         
         # 创建包描述文件
-        cat > "${PACKAGE_DIR}/package.json" << EOF
+        if [ -z "$RELEASE_TITLE" ]; then
+          RELEASE_TITLE="VLC Android ${VERSION} (${ABI})"
+        fi
+        
+        cat > "${PACKAGE_DIR}/package.json" << PACKAGEEOF
         {
           "name": "vlc-android",
           "version": "${VERSION}",
           "abi": "${ABI}",
-          "description": "${{ github.event.inputs.release_title || 'VLC Android APK' }}",
+          "description": "${RELEASE_TITLE}",
           "build_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-          "repository": "${{ github.repository }}",
-          "files": $(ls apk_output/ | jq -R -s 'split("\n")[:-1]')
+          "repository": "${{ github.repository }}"
         }
-        EOF
+        PACKAGEEOF
         
         echo "✅ 包目录结构创建完成"
         ls -la "${PACKAGE_DIR}/"
@@ -345,20 +349,25 @@ jobs:
       run: |
         echo "=== 发布 APK 到 GitHub Packages ==="
         
+        VERSION="${{ github.event.inputs.version }}"
+        ABI="${{ github.event.inputs.abi }}"
+        RELEASE_TITLE="${{ github.event.inputs.release_title }}"
+        SAFE_VERSION=$(echo "${VERSION}" | sed 's/[^a-zA-Z0-9.]/-/g')
+        
+        if [ -z "$RELEASE_TITLE" ]; then
+          RELEASE_TITLE="VLC Android ${VERSION} (${ABI})"
+        fi
+        
         # 设置包注册表
         echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > .npmrc
         echo "@${{ github.repository_owner }}:registry=https://npm.pkg.github.com" >> .npmrc
         
         # 创建 package.json 用于 npm 包发布
-        VERSION="${{ github.event.inputs.version }}"
-        ABI="${{ github.event.inputs.abi }}"
-        SAFE_VERSION=$(echo "${VERSION}" | sed 's/[^a-zA-Z0-9.]/-/g')
-        
-        cat > package.json << EOF
+        cat > package.json << PACKAGEEOF
         {
           "name": "@${{ github.repository_owner }}/vlc-android-${ABI}",
           "version": "${SAFE_VERSION}",
-          "description": "${{ github.event.inputs.release_title || format('VLC Android {0} ({1})', VERSION, ABI) }}",
+          "description": "${RELEASE_TITLE}",
           "repository": {
             "type": "git",
             "url": "https://github.com/${{ github.repository }}.git"
@@ -367,7 +376,7 @@ jobs:
             "*.apk"
           ]
         }
-        EOF
+        PACKAGEEOF
         
         # 复制 APK 文件到当前目录
         cp apk_output/*.apk .
