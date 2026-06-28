@@ -19,7 +19,7 @@ on:
           - x86
           - x86_64
       release_title:
-        description: 'Release title (optional)'
+        description: 'Package description (optional)'
         required: false
         type: string
         default: ''
@@ -28,15 +28,10 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     permissions:
-      contents: write
+      contents: read
       packages: write
     
     steps:
-    # 注意：这里不需要 checkout 自己的仓库代码，因为我们只需要构建 VLC
-    # 但为了存放密钥和上传脚本，还是保留 checkout
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
@@ -73,47 +68,32 @@ jobs:
         echo "ANDROID_NDK_HOME=${GITHUB_WORKSPACE}/android-ndk-r26d" >> $GITHUB_ENV
         rm android-ndk-r26d-linux.zip
 
-    - name: Verify and setup keystore
-      id: verify_keystore
+    - name: Create keystore from secrets
       run: |
-        echo "=== 步骤1: 解码密钥文件 ==="
+        echo "=== 从 Secrets 创建密钥文件 ==="
         echo "${{ secrets.SIGNING_KEYSTORE_FILE }}" | base64 -d > keystore.jks
-        echo "文件大小: $(wc -c < keystore.jks) 字节"
+        echo "密钥文件大小: $(wc -c < keystore.jks) 字节"
         
-        echo "=== 步骤2: 测试密码和别名 ==="
+        # 验证密钥文件
         if keytool -list -keystore keystore.jks -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
-          echo "✅ 密码正确"
-          echo "password_correct=true" >> $GITHUB_OUTPUT
+          echo "✅ 密钥文件验证成功"
         else
-          echo "❌ 密码错误"
-          echo "password_correct=false" >> $GITHUB_OUTPUT
+          echo "❌ 密钥文件验证失败"
+          exit 1
         fi
         
         if keytool -list -keystore keystore.jks -alias "${{ secrets.SIGNING_KEY_ALIAS }}" -storepass "${{ secrets.SIGNING_STORE_PASSWORD }}" 2>/dev/null; then
-          echo "✅ 别名存在"
-          echo "alias_exists=true" >> $GITHUB_OUTPUT
+          echo "✅ 密钥别名验证成功"
         else
-          echo "❌ 别名不存在"
-          echo "alias_exists=false" >> $GITHUB_OUTPUT
+          echo "❌ 密钥别名验证失败"
+          exit 1
         fi
-        
-    - name: Keystore validation failed
-      if: steps.verify_keystore.outputs.password_correct != 'true' || steps.verify_keystore.outputs.alias_exists != 'true'
-      run: |
-        echo "❌ 密钥库验证失败"
-        exit 1
         
     - name: Download and prepare VLC Android source code
       run: |
         VERSION="${{ github.event.inputs.version }}"
         echo "=== 准备 VLC Android 源代码 v${VERSION} ==="
         echo "当前工作目录: $(pwd)"
-        
-        # 强制清理旧的源代码（确保干净构建）
-        if [ -d "vlc-android" ]; then
-          echo "清理旧的源代码目录..."
-          rm -rf vlc-android
-        fi
         
         # 下载源代码
         echo "下载源代码: https://github.com/videolan/vlc-android/archive/refs/tags/${VERSION}.tar.gz"
@@ -143,15 +123,10 @@ jobs:
         ls -la vlc-android/ | head -20
         
         # 复制密钥文件到 VLC 目录
-        if [ -f "keystore.jks" ]; then
-          cp keystore.jks vlc-android/
-          echo "✅ 密钥文件已复制到 vlc-android/"
-        else
-          echo "❌ 密钥文件不存在！"
-          exit 1
-        fi
+        cp keystore.jks vlc-android/
+        echo "✅ 密钥文件已复制到 vlc-android/"
         
-        # 验证 VLC 源码是否正确
+        # 验证 VLC 源码完整性
         if [ -f "vlc-android/buildsystem/compile.sh" ]; then
           echo "✅ VLC 源码验证通过"
         else
@@ -167,13 +142,13 @@ jobs:
         
         # 创建或追加 gradle.properties
         cat >> gradle.properties << EOF
-        
+
         # Signing configuration for Release builds
         RELEASE_STORE_FILE=keystore.jks
         RELEASE_STORE_PASSWORD=${{ secrets.SIGNING_STORE_PASSWORD }}
         RELEASE_KEY_ALIAS=${{ secrets.SIGNING_KEY_ALIAS }}
         RELEASE_KEY_PASSWORD=${{ secrets.SIGNING_STORE_PASSWORD }}
-        
+
         # Android settings
         android.useAndroidX=true
         android.enableJetifier=true
@@ -219,12 +194,6 @@ jobs:
         # 确保编译脚本可执行
         chmod +x buildsystem/compile.sh
         
-        # 检查编译脚本是否存在
-        if [ ! -f "buildsystem/compile.sh" ]; then
-          echo "❌ 找不到 buildsystem/compile.sh"
-          exit 1
-        fi
-        
         # 编译 LibVLC
         echo "编译 LibVLC..."
         ./buildsystem/compile.sh -l -a $VLC_ABI
@@ -262,25 +231,13 @@ jobs:
         echo "清理之前的构建..."
         ./gradlew clean --no-daemon
         
-        # 尝试构建 Release 版本
-        echo "尝试构建 Release APK..."
+        # 构建 Release 版本
+        echo "构建 Release APK..."
         ./gradlew assembleRelease --no-daemon --stacktrace \
           -PreleaseStoreFile=keystore.jks \
           -PreleaseStorePassword="${{ secrets.SIGNING_STORE_PASSWORD }}" \
           -PreleaseKeyAlias="${{ secrets.SIGNING_KEY_ALIAS }}" \
           -PreleaseKeyPassword="${{ secrets.SIGNING_STORE_PASSWORD }}"
-        
-        # 如果 Release 失败，尝试 Dev 版本
-        if [ $? -ne 0 ]; then
-          echo "⚠️ Release 构建失败，尝试 Dev 版本..."
-          ./gradlew assembleDev --no-daemon --stacktrace
-        fi
-        
-        # 如果还是失败，尝试 Debug 版本
-        if [ $? -ne 0 ]; then
-          echo "⚠️ Dev 构建失败，尝试 Debug 版本..."
-          ./gradlew assembleDebug --no-daemon --stacktrace
-        fi
         
         if [ $? -eq 0 ]; then
           echo "✅ APK 构建完成"
@@ -293,66 +250,52 @@ jobs:
         echo ""
         echo "=== 构建产物列表 ==="
         find ./app/build/outputs/apk -name "*.apk" -type f -exec ls -lh {} \;
-        echo ""
-        echo "=== 所有 APK 文件 ==="
-        find . -name "*.apk" -type f -exec ls -lh {} \;
       env:
         ANDROID_SDK: ${{ env.ANDROID_HOME }}
         ANDROID_NDK: ${{ env.ANDROID_NDK }}
         
     - name: Find and prepare APK files
       id: prepare_apks
+      working-directory: ./vlc-android
       run: |
         VERSION="${{ github.event.inputs.version }}"
         ABI="${{ github.event.inputs.abi }}"
-        mkdir -p apk_output
+        mkdir -p ../apk_output
         
         echo "=== 搜索 APK 文件 ==="
         echo "当前目录: $(pwd)"
         
-        # 检查 VLC 源码目录是否存在
-        if [ ! -d "vlc-android" ]; then
-          echo "❌ vlc-android 目录不存在！"
-          exit 1
-        fi
-        
         # 搜索所有 APK
         APK_COUNT=0
-        echo "搜索路径: vlc-android/"
+        echo "搜索路径: app/build/outputs/apk/"
         
-        for apk in $(find ./vlc-android -name "*.apk" -type f 2>/dev/null); do
+        for apk in $(find ./app/build/outputs/apk -name "*.apk" -type f 2>/dev/null); do
           BASENAME=$(basename "$apk")
           FILE_SIZE=$(du -h "$apk" | cut -f1)
-          FILE_SIZE_BYTES=$(stat -c%s "$apk" 2>/dev/null || stat -f%z "$apk" 2>/dev/null)
+          FILE_SIZE_BYTES=$(stat -c%s "$apk" 2>/dev/null)
           
           # 只复制大于 1MB 的 APK（有效的 APK）
           if [ "$FILE_SIZE_BYTES" -gt 1048576 ]; then
             NEW_NAME="vlc-android-${VERSION}-${ABI}-${BASENAME}"
-            cp "$apk" "apk_output/${NEW_NAME}"
+            cp "$apk" "../apk_output/${NEW_NAME}"
             echo "📱 APK: ${NEW_NAME} (大小: $FILE_SIZE)"
             APK_COUNT=$((APK_COUNT + 1))
           else
-            echo "⚠️ 忽略小文件: $BASENAME (大小: $FILE_SIZE, 可能不是有效的 APK)"
+            echo "⚠️ 忽略小文件: $BASENAME (大小: $FILE_SIZE)"
           fi
         done
         
         if [ $APK_COUNT -gt 0 ]; then
           echo ""
           echo "=== 找到的 APK 文件 ==="
-          ls -lh apk_output/
+          ls -lh ../apk_output/
+          echo "APK_COUNT=$APK_COUNT" >> $GITHUB_OUTPUT
         else
-          echo "❌ 未找到任何有效的 APK 文件（大于 1MB）！"
-          echo ""
-          echo "=== 调试信息 ==="
-          echo "检查构建输出目录:"
-          ls -la ./vlc-android/app/build/outputs/apk/ 2>/dev/null || echo "apk 目录不存在"
-          echo ""
-          echo "搜索所有 APK（包括小文件）:"
-          find ./vlc-android -name "*.apk" -type f -exec ls -lh {} \; 2>/dev/null || echo "没有找到任何 APK"
+          echo "❌ 未找到任何有效的 APK 文件！"
+          echo "调试信息："
+          find . -name "*.apk" -type f -exec ls -lh {} \; 2>/dev/null || echo "没有找到任何 APK"
           exit 1
         fi
-        
-        echo "APK_COUNT=$APK_COUNT" >> $GITHUB_OUTPUT
         
     - name: Upload APK as Artifact
       uses: actions/upload-artifact@v4
@@ -362,24 +305,86 @@ jobs:
         retention-days: 90
         if-no-files-found: error
         
-    - name: Create GitHub Release and Upload APK
-      uses: softprops/action-gh-release@v1
+    - name: Create package directory structure
+      run: |
+        # 创建 Maven 风格的包结构
+        PACKAGE_DIR="maven-package"
+        VERSION="${{ github.event.inputs.version }}"
+        ABI="${{ github.event.inputs.abi }}"
+        
+        mkdir -p "${PACKAGE_DIR}"
+        
+        # 复制 APK 文件
+        cp apk_output/*.apk "${PACKAGE_DIR}/"
+        
+        # 创建包描述文件
+        cat > "${PACKAGE_DIR}/package.json" << EOF
+        {
+          "name": "vlc-android",
+          "version": "${VERSION}",
+          "abi": "${ABI}",
+          "description": "${{ github.event.inputs.release_title || 'VLC Android APK' }}",
+          "build_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+          "repository": "${{ github.repository }}",
+          "files": $(ls apk_output/ | jq -R -s 'split("\n")[:-1]')
+        }
+        EOF
+        
+        echo "✅ 包目录结构创建完成"
+        ls -la "${PACKAGE_DIR}/"
+        
+    - name: Upload APK to GitHub Packages
+      uses: actions/upload-artifact@v4
       with:
-        tag_name: v${{ github.event.inputs.version }}-${{ github.event.inputs.abi }}
-        name: ${{ github.event.inputs.release_title || format('VLC Android {0} ({1})', github.event.inputs.version, github.event.inputs.abi) }}
-        files: apk_output/*.apk
-        draft: false
-        prerelease: false
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        name: vlc-android-package-${{ github.event.inputs.version }}-${{ github.event.inputs.abi }}
+        path: maven-package/*
+        retention-days: 0
+        if-no-files-found: error
+        
+    - name: Publish to GitHub Packages
+      run: |
+        echo "=== 发布 APK 到 GitHub Packages ==="
+        
+        # 设置包注册表
+        echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > .npmrc
+        echo "@${{ github.repository_owner }}:registry=https://npm.pkg.github.com" >> .npmrc
+        
+        # 创建 package.json 用于 npm 包发布
+        VERSION="${{ github.event.inputs.version }}"
+        ABI="${{ github.event.inputs.abi }}"
+        SAFE_VERSION=$(echo "${VERSION}" | sed 's/[^a-zA-Z0-9.]/-/g')
+        
+        cat > package.json << EOF
+        {
+          "name": "@${{ github.repository_owner }}/vlc-android-${ABI}",
+          "version": "${SAFE_VERSION}",
+          "description": "${{ github.event.inputs.release_title || format('VLC Android {0} ({1})', VERSION, ABI) }}",
+          "repository": {
+            "type": "git",
+            "url": "https://github.com/${{ github.repository }}.git"
+          },
+          "files": [
+            "*.apk"
+          ]
+        }
+        EOF
+        
+        # 复制 APK 文件到当前目录
+        cp apk_output/*.apk .
+        
+        # 发布包
+        npm publish --registry=https://npm.pkg.github.com/
+        
+        echo "✅ 包已发布到 GitHub Packages"
         
     - name: Cleanup
       if: always()
       run: |
         rm -f keystore.jks
-        rm -f vlc-android/keystore.jks
         rm -rf vlc-android
         rm -rf android-ndk-r26d
         rm -rf apk_output
+        rm -rf maven-package
+        rm -f package.json
+        rm -f .npmrc
         echo "🧹 清理完成"
