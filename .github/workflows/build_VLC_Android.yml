@@ -28,18 +28,24 @@ jobs:
     timeout-minutes: 360
     
     steps:
-    # 注意：这里 checkout 是为了获取 workflow 本身，不是构建所需
-    # 实际构建完全从下载的源码进行
     - name: Checkout (only for action reference)
       uses: actions/checkout@v4
       with:
         ref: ${{ github.event.repository.default_branch }}
 
-    - name: Setup JDK 11
+    # 先安装 JDK 17 给 SDK manager 使用
+    - name: Setup JDK 17 for SDK Manager
       uses: actions/setup-java@v4
       with:
-        java-version: '11'
+        java-version: '17'
         distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      env:
+        SKIP_JDK_VERSION_CHECK: true
+      with:
+        packages: 'platforms;android-30 build-tools;30.0.3 platforms;android-33 build-tools;33.0.0 ndk;21.4.7075529'
 
     - name: Install Build Dependencies
       run: |
@@ -71,12 +77,13 @@ jobs:
           bison \
           m4
 
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
+    # VLC 构建需要 JDK 8，切换到 JDK 8
+    - name: Setup JDK 8 for VLC Build
+      uses: actions/setup-java@v4
       with:
-        packages: 'platforms;android-30 build-tools;30.0.3 platforms;android-33 build-tools;33.0.0 ndk;21.4.7075529'
+        java-version: '8'
+        distribution: 'temurin'
 
-    # 从这里开始，所有代码都来自下载的源码，不依赖仓库代码
     - name: Download VLC Android Source
       run: |
         echo "Downloading VLC Android ${VLC_VERSION} from GitHub..."
