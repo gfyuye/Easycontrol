@@ -96,36 +96,55 @@ jobs:
         echo "=== 克隆 VLC Android 源代码 v${VERSION} ==="
         echo "当前工作目录: $(pwd)"
         
-        # 配置 git 以支持子模块克隆
+        # 配置 git
         git config --global user.email "github-actions@github.com"
         git config --global user.name "GitHub Actions"
+        git config --global advice.detachedHead false
         
-        # 克隆 VLC Android 仓库（包含子模块）
+        # 克隆 VLC Android 仓库
         echo "克隆仓库: https://github.com/videolan/vlc-android.git"
-        git clone --branch ${VERSION} --recurse-submodules https://github.com/videolan/vlc-android.git
+        git clone --branch ${VERSION} https://github.com/videolan/vlc-android.git
         if [ $? -ne 0 ]; then
-          echo "❌ 克隆失败！尝试不使用 --recurse-submodules..."
-          git clone --branch ${VERSION} https://github.com/videolan/vlc-android.git
-          cd vlc-android
-          git submodule update --init --recursive
-          cd ..
+          echo "❌ 克隆失败！"
+          exit 1
         fi
         echo "✅ 克隆完成"
         
         cd vlc-android
         
-        # 验证子模块是否完整
-        if [ -d "libvlcjni" ] && [ -f "libvlcjni/build.gradle" ]; then
-          echo "✅ libvlcjni 子模块验证通过"
+        # 查看 .gitmodules 文件了解子模块配置
+        echo "=== 检查子模块配置 ==="
+        if [ -f ".gitmodules" ]; then
+          echo ".gitmodules 内容:"
+          cat .gitmodules
         else
-          echo "⚠️ libvlcjni 子模块不完整，手动初始化..."
-          git submodule deinit -f libvlcjni
-          git submodule update --init --recursive libvlcjni
+          echo "⚠️ 没有 .gitmodules 文件"
         fi
         
-        echo "源代码目录: $(pwd)"
-        echo "目录结构:"
-        ls -la | head -20
+        # 初始化并更新所有子模块
+        echo "=== 初始化子模块 ==="
+        git submodule init
+        
+        echo "=== 更新子模块 ==="
+        git submodule update --init --recursive
+        
+        if [ $? -ne 0 ]; then
+          echo "⚠️ 子模块更新遇到问题"
+          echo "=== 尝试逐个更新子模块 ==="
+          
+          # 获取子模块列表
+          git submodule status | while read line; do
+            SUBMODULE_PATH=$(echo $line | awk '{print $2}')
+            echo "更新子模块: $SUBMODULE_PATH"
+            git submodule update --init "$SUBMODULE_PATH" || echo "跳过 $SUBMODULE_PATH"
+          done
+        fi
+        
+        echo "=== 源代码目录结构 ==="
+        ls -la
+        
+        echo "=== 子模块状态 ==="
+        git submodule status
         
         # 复制密钥文件到 VLC 目录
         cp ../keystore.jks .
@@ -171,12 +190,9 @@ jobs:
       run: |
         ABI="${{ github.event.inputs.abi }}"
         
-        # 转换 ABI 名称（VLC 编译脚本使用 arm64, arm, x86, x86_64）
-        VLC_ABI="$ABI"
-        
         echo "=== 开始编译 VLC 核心库 ==="
         echo "当前目录: $(pwd)"
-        echo "选择的 ABI: $VLC_ABI"
+        echo "选择的 ABI: $ABI"
         echo "ANDROID_SDK: $ANDROID_SDK"
         echo "ANDROID_NDK: $ANDROID_NDK"
         echo "开始时间: $(date)"
@@ -186,7 +202,7 @@ jobs:
         
         # 编译 LibVLC（根据官方文档：buildsystem/compile.sh -l -a <ABI>）
         echo "编译 LibVLC..."
-        ./buildsystem/compile.sh -l -a $VLC_ABI
+        ./buildsystem/compile.sh -l -a $ABI
         
         if [ $? -ne 0 ]; then
           echo "❌ LibVLC 编译失败"
@@ -195,7 +211,7 @@ jobs:
         
         # 编译 Medialibrary（根据官方文档：-ml 代替 -l）
         echo "编译 Medialibrary..."
-        ./buildsystem/compile.sh -ml -a $VLC_ABI
+        ./buildsystem/compile.sh -ml -a $ABI
         
         if [ $? -ne 0 ]; then
           echo "❌ Medialibrary 编译失败"
@@ -221,7 +237,7 @@ jobs:
         echo "清理之前的构建..."
         ./gradlew clean --no-daemon
         
-        # 构建 Dev 版本（包含 LibVLC 和 Medialibrary）
+        # 构建 Dev 版本（包含编译好的库）
         echo "构建 Dev APK（包含编译好的库）..."
         ./gradlew assembleDev --no-daemon --stacktrace \
           -PreleaseStoreFile=keystore.jks \
