@@ -33,7 +33,12 @@ jobs:
       with:
         ref: ${{ github.event.repository.default_branch }}
 
-    - name: Setup JDK 17 for SDK Manager and Gradle
+    - name: Configure Git
+      run: |
+        git config --global user.email "github-actions@github.com"
+        git config --global user.name "GitHub Actions"
+
+    - name: Setup JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
@@ -95,12 +100,6 @@ jobs:
         echo "Using JAVA_HOME: $JAVA_HOME"
         echo "Java version: $(java -version 2>&1)"
         
-        # 修改 gradle wrapper 使用 JDK 17
-        if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
-          # 如果需要，可以修改 gradle wrapper 配置
-          sed -i 's/gradle-.*-bin.zip/gradle-7.6.4-bin.zip/g' gradle/wrapper/gradle-wrapper.properties || true
-        fi
-        
         bash buildsystem/compile.sh -l -r -a ${{ github.event.inputs.abi }}
         echo "Build completed at $(date)"
 
@@ -114,18 +113,10 @@ jobs:
         echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
         echo "ndk.dir=$ANDROID_NDK" >> local.properties
         
-        # 如果项目使用 gradle wrapper，配置使用 JDK 17
-        if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
-          echo "Configuring Gradle wrapper to use compatible version..."
-          # 使用 Gradle 8.x (兼容 JDK 17)
-          sed -i 's/gradle-.*-bin.zip/gradle-8.5-bin.zip/g' gradle/wrapper/gradle-wrapper.properties
-        fi
-        
         echo "Building APK at $(date)..."
         echo "Using Java: $(which java)"
         echo "Java version: $(java -version 2>&1)"
         
-        # 设置 Gradle JVM 参数
         export GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx2048m"
         
         ./gradlew assembleDev --no-daemon --stacktrace
