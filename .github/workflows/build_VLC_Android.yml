@@ -53,13 +53,17 @@ jobs:
     - name: Install Build Dependencies
       run: |
         sudo apt-get update -qq
+        
+        # 安装基础依赖
         sudo apt-get install -y -qq \
           automake \
           ant \
           autopoint \
           cmake \
           build-essential \
+          libtool \
           libtool-bin \
+          libltdl-dev \
           patch \
           pkg-config \
           protobuf-compiler \
@@ -78,7 +82,40 @@ jobs:
           texinfo \
           yasm \
           bison \
-          m4
+          m4 \
+          autoconf \
+          autoconf-archive \
+          libmpg123-dev \
+          libmp3lame-dev \
+          libvorbis-dev \
+          libogg-dev \
+          libtheora-dev \
+          libx264-dev \
+          libvpx-dev \
+          libavcodec-dev \
+          libavformat-dev \
+          libswscale-dev \
+          libavutil-dev
+
+    - name: Fix libtool macros
+      run: |
+        # 确保 libtool 宏文件存在
+        if [ ! -f /usr/share/aclocal/libtool.m4 ]; then
+          echo "Copying libtool macros to aclocal directory..."
+          sudo cp /usr/share/libtool/build-aux/libtool.m4 /usr/share/aclocal/ || true
+          sudo cp /usr/share/libtool/build-aux/ltoptions.m4 /usr/share/aclocal/ || true
+          sudo cp /usr/share/libtool/build-aux/ltsugar.m4 /usr/share/aclocal/ || true
+          sudo cp /usr/share/libtool/build-aux/ltversion.m4 /usr/share/aclocal/ || true
+          sudo cp /usr/share/libtool/build-aux/lt~obsolete.m4 /usr/share/aclocal/ || true
+        fi
+        
+        # 更新 aclocal 数据库
+        sudo aclocal --force
+        
+        # 检查 libtool 版本
+        libtool --version
+        autoconf --version
+        automake --version
 
     - name: Download VLC Android Source
       run: |
@@ -95,12 +132,17 @@ jobs:
         ANDROID_SDK: ${{ env.ANDROID_SDK_ROOT }}
         ANDROID_NDK: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.ANDROID_NDK_VERSION }}
         JAVA_HOME: ${{ env.JAVA_HOME }}
+        ACLOCAL_PATH: "/usr/share/aclocal"
       run: |
         echo "Starting VLC build for ${{ github.event.inputs.abi }}..."
         echo "Build started at $(date)"
         echo "Using JAVA_HOME: $JAVA_HOME"
         echo "Using ANDROID_NDK: $ANDROID_NDK"
         echo "Java version: $(java -version 2>&1)"
+        
+        # 设置环境变量以帮助找到宏
+        export ACLOCAL="aclocal -I /usr/share/aclocal"
+        export AUTORECONF="autoreconf -I /usr/share/aclocal"
         
         bash buildsystem/compile.sh -l -r -a ${{ github.event.inputs.abi }}
         echo "Build completed at $(date)"
